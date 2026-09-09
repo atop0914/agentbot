@@ -11,7 +11,7 @@ import (
 // key 是当前状态，value 是允许转换到的目标状态列表
 var stateTransitions = map[State][]State{
 	StateIdle:      {StateRunning, StateTerminated},
-	StateRunning:   {StatePaused, StateError, StateCompleted, StateTerminated},
+	StateRunning:   {StateIdle, StatePaused, StateError, StateCompleted, StateTerminated},
 	StatePaused:    {StateRunning, StateTerminated},
 	StateError:     {StateIdle, StateRunning, StateTerminated},
 	StateCompleted: {StateIdle, StateTerminated},
