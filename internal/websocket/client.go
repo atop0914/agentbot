@@ -190,16 +190,19 @@ func (c *Client) Send(msgType string, payload interface{}) error {
 	return nil
 }
 
-// Close gracefully closes the connection.
+// Close gracefully closes the connection by signaling the WritePump
+// and unblocking the ReadPump via conn.Close().
 func (c *Client) Close() {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.closed {
+		c.mu.Unlock()
 		return
 	}
 	c.closed = true
-	c.conn.WriteMessage(websocket.CloseMessage,
-		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+	close(c.send)
+	c.mu.Unlock()
+	// Close conn to unblock ReadPump's blocking ReadMessage call.
+	// This is safe: gorilla/websocket conn.Close() is idempotent.
 	c.conn.Close()
 }
 

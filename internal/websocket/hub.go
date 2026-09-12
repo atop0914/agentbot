@@ -207,7 +207,13 @@ func (h *Hub) onUnregister(c *Client) {
 		}
 	}
 
-	close(c.send)
+	// Only close send if Close() hasn't already done it
+	c.mu.Lock()
+	if !c.closed {
+		c.closed = true
+		close(c.send)
+	}
+	c.mu.Unlock()
 
 	h.logger.Info("client disconnected",
 		"client_id", c.ID,
