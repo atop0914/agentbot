@@ -284,11 +284,13 @@ type taskQueue []*QueueItem
 func (q taskQueue) Len() int { return len(q) }
 
 func (q taskQueue) Less(i, j int) bool {
-	// 优先级高的排前面
+	// Go heap 是 min-heap，Pop 取最小值
+	// 我们要高优先级先出、同优先级先进先出
+	// 所以 Less 返回 true 意味着 i 的"值"更小（排在堆顶被先弹出）
 	if q[i].Priority != q[j].Priority {
-		return q[i].Priority > q[j].Priority
+		return q[i].Priority > q[j].Priority // 高优先级 = 更小的值 = 先弹出
 	}
-	// 同优先级按先进先出
+	// 同优先级：先进先出（更早入队 = 更小的值 = 先弹出）
 	return q[i].EnqueuedAt.Before(q[j].EnqueuedAt)
 }
 
