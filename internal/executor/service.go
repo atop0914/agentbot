@@ -150,32 +150,35 @@ func (s *taskService) Start(ctx context.Context, id string) error {
 		Timestamp: time.Now().UTC(),
 	})
 
-	// 异步执行子任务
-	go func() {
+	// 异步执行子任务（加载独立副本避免与 Retry/Cancel 竞争）
+	go func(taskID string) {
 		runCtx := context.Background()
-		if err := s.runner.RunTask(runCtx, t); err != nil {
-			t.State = task.StateFailed
-			t.Error = err.Error()
+		local, err := s.repo.GetByID(runCtx, taskID)
+		if err != nil {
+			return
+		}
+		if err := s.runner.RunTask(runCtx, local); err != nil {
+			local.State = task.StateFailed
+			local.Error = err.Error()
 		} else {
-			// 检查是否有失败的子任务
 			allCompleted := true
-			for _, st := range t.Subtasks {
+			for _, st := range local.Subtasks {
 				if st.State == task.StateFailed {
 					allCompleted = false
 					break
 				}
 			}
 			if allCompleted {
-				t.State = task.StateCompleted
-				t.CompletedAt = time.Now().UTC()
-				t.Result = "all subtasks completed"
+				local.State = task.StateCompleted
+				local.CompletedAt = time.Now().UTC()
+				local.Result = "all subtasks completed"
 			} else {
-				t.State = task.StateFailed
-				t.Error = "some subtasks failed"
+				local.State = task.StateFailed
+				local.Error = "some subtasks failed"
 			}
 		}
-		s.repo.Update(runCtx, t)
-	}()
+		s.repo.Update(runCtx, local)
+	}(t.ID)
 
 	return nil
 }

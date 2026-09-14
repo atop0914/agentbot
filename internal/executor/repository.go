@@ -44,7 +44,7 @@ func (r *memoryRepository) Create(ctx context.Context, t *task.Task) error {
 	return nil
 }
 
-// GetByID 根据 ID 获取任务
+// GetByID 根据 ID 获取任务（返回深拷贝，避免并发竞争）
 func (r *memoryRepository) GetByID(ctx context.Context, id string) (*task.Task, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -53,7 +53,7 @@ func (r *memoryRepository) GetByID(ctx context.Context, id string) (*task.Task, 
 	if !ok {
 		return nil, fmt.Errorf("task not found: %s", id)
 	}
-	return t, nil
+	return copyTask(t), nil
 }
 
 // Update 更新任务
@@ -130,4 +130,42 @@ func matchFilter(t *task.Task, filter TaskFilter) bool {
 		return false
 	}
 	return true
+}
+
+// copyTask 深拷贝 Task，避免并发读写同一指针
+func copyTask(src *task.Task) *task.Task {
+	dst := *src
+	dst.Subtasks = make([]task.Subtask, len(src.Subtasks))
+	for i, st := range src.Subtasks {
+		dst.Subtasks[i] = copySubtask(st)
+	}
+	return &dst
+}
+
+// copySubtask 深拷贝 Subtask
+func copySubtask(src task.Subtask) task.Subtask {
+	dst := src
+	if src.DependsOn != nil {
+		dst.DependsOn = make([]string, len(src.DependsOn))
+		copy(dst.DependsOn, src.DependsOn)
+	}
+	if src.Actions != nil {
+		dst.Actions = make([]task.Action, len(src.Actions))
+		for i, a := range src.Actions {
+			dst.Actions[i] = copyAction(a)
+		}
+	}
+	return dst
+}
+
+// copyAction 深拷贝 Action
+func copyAction(src task.Action) task.Action {
+	dst := src
+	if src.Params != nil {
+		dst.Params = make(map[string]string, len(src.Params))
+		for k, v := range src.Params {
+			dst.Params[k] = v
+		}
+	}
+	return dst
 }
