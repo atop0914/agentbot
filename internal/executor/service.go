@@ -13,26 +13,41 @@ import (
 
 // taskService 实现 task.Manager 接口
 type taskService struct {
-	repo      Repository
-	observers []TaskObserver
+	repo       Repository
+	decomposer task.Decomposer
+	runner     *task.TaskRunner
+	observers  []TaskObserver
 }
 
-// NewService 创建任务管理服务
+// NewService 创建任务管理服务（使用默认拆解器）
 func NewService(repo Repository) task.Manager {
 	return &taskService{
-		repo: repo,
+		repo:       repo,
+		decomposer: task.NewRuleBasedDecomposer(),
+		runner:     task.NewTaskRunner(task.NewExecutorRegistry()),
+	}
+}
+
+// NewServiceWithDecomposer 创建带自定义拆解器的服务
+func NewServiceWithDecomposer(repo Repository, decomposer task.Decomposer) task.Manager {
+	return &taskService{
+		repo:       repo,
+		decomposer: decomposer,
+		runner:     task.NewTaskRunner(task.NewExecutorRegistry()),
 	}
 }
 
 // NewServiceWithObservers 创建带观察者的服务
 func NewServiceWithObservers(repo Repository, observers ...TaskObserver) task.Manager {
 	return &taskService{
-		repo:      repo,
-		observers: observers,
+		repo:       repo,
+		decomposer: task.NewRuleBasedDecomposer(),
+		runner:     task.NewTaskRunner(task.NewExecutorRegistry()),
+		observers:  observers,
 	}
 }
 
-// Create 创建新任务
+// Create 创建新任务并自动拆解目标为子任务
 func (s *taskService) Create(ctx context.Context, agentID string, goal string) (*task.Task, error) {
 	if agentID == "" {
 		return nil, errors.NewAppError(errors.ErrBadRequest, 400, "agent_id is required", "")
@@ -43,19 +58,45 @@ func (s *taskService) Create(ctx context.Context, agentID string, goal string) (
 
 	now := time.Now().UTC()
 	t := &task.Task{
-		ID:        uuid.New().String(),
-		AgentID:   agentID,
-		Goal:      goal,
-		State:     task.StatePending,
+		ID:         uuid.New().String(),
+		AgentID:    agentID,
+		Goal:       goal,
+		State:      task.StatePending,
 		MaxRetries: 3,
-		CreatedAt: now,
+		CreatedAt:  now,
 	}
+
+	// 使用拆解器将目标拆解为子任务
+	subtasks, err := s.decomposer.Decompose(ctx, goal)
+	if err != nil {
+		return nil, errors.NewAppError(errors.ErrInternal, 500, "failed to decompose goal", err.Error())
+	}
+
+	// 将子任务关联到任务
+	for i := range subtasks {
+		subtasks[i].TaskID = t.ID
+	}
+	t.Subtasks = subtasks
 
 	if err := s.repo.Create(ctx, t); err != nil {
 		return nil, errors.NewAppError(errors.ErrInternal, 500, "failed to create task", err.Error())
 	}
 
 	return t, nil
+}
+
+// Decompose 仅拆解目标，不创建任务
+func (s *taskService) Decompose(ctx context.Context, goal string) ([]task.Subtask, error) {
+	if goal == "" {
+		return nil, errors.NewAppError(errors.ErrBadRequest, 400, "goal is required", "")
+	}
+
+	subtasks, err := s.decomposer.Decompose(ctx, goal)
+	if err != nil {
+		return nil, errors.NewAppError(errors.ErrInternal, 500, "failed to decompose goal", err.Error())
+	}
+
+	return subtasks, nil
 }
 
 // Get 获取任务
@@ -81,7 +122,7 @@ func (s *taskService) List(ctx context.Context, agentID string, state task.TaskS
 	return s.repo.List(ctx, filter, 0, 100)
 }
 
-// Start 启动任务
+// Start 启动任务（触发子任务执行）
 func (s *taskService) Start(ctx context.Context, id string) error {
 	t, err := s.repo.GetByID(ctx, id)
 	if err != nil {
@@ -108,6 +149,33 @@ func (s *taskService) Start(ctx context.Context, id string) error {
 		NewState:  t.State,
 		Timestamp: time.Now().UTC(),
 	})
+
+	// 异步执行子任务
+	go func() {
+		runCtx := context.Background()
+		if err := s.runner.RunTask(runCtx, t); err != nil {
+			t.State = task.StateFailed
+			t.Error = err.Error()
+		} else {
+			// 检查是否有失败的子任务
+			allCompleted := true
+			for _, st := range t.Subtasks {
+				if st.State == task.StateFailed {
+					allCompleted = false
+					break
+				}
+			}
+			if allCompleted {
+				t.State = task.StateCompleted
+				t.CompletedAt = time.Now().UTC()
+				t.Result = "all subtasks completed"
+			} else {
+				t.State = task.StateFailed
+				t.Error = "some subtasks failed"
+			}
+		}
+		s.repo.Update(runCtx, t)
+	}()
 
 	return nil
 }
@@ -234,6 +302,11 @@ func (s *taskService) Retry(ctx context.Context, id string) error {
 		t.Subtasks[i].State = task.StatePending
 		t.Subtasks[i].Result = ""
 		t.Subtasks[i].Error = ""
+		for j := range t.Subtasks[i].Actions {
+			t.Subtasks[i].Actions[j].State = task.StatePending
+			t.Subtasks[i].Actions[j].Result = ""
+			t.Subtasks[i].Actions[j].Error = ""
+		}
 	}
 
 	if err := s.repo.Update(ctx, t); err != nil {

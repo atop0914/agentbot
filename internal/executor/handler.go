@@ -24,6 +24,7 @@ func NewHandler(manager task.Manager) *Handler {
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/tasks", h.handleTasks)
 	mux.HandleFunc("/api/v1/tasks/", h.handleTaskByID)
+	mux.HandleFunc("/api/v1/decompose", h.handleDecompose)
 }
 
 // handleTasks 处理 /api/v1/tasks 路由
@@ -111,6 +112,43 @@ func (h *Handler) handleAction(w http.ResponseWriter, r *http.Request, id, actio
 	default:
 		writeError(w, http.StatusBadRequest, "unknown action: "+action)
 	}
+}
+
+// handleDecompose 处理目标拆解请求
+// POST /api/v1/decompose
+// Body: {"goal": "..."}
+func (h *Handler) handleDecompose(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	var req struct {
+		Goal string `json:"goal"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.Goal == "" {
+		writeError(w, http.StatusBadRequest, "goal is required")
+		return
+	}
+
+	// 创建临时任务来获取拆解结果
+	t, err := h.manager.Create(r.Context(), "decompose-preview", req.Goal)
+	if err != nil {
+		appErr := errors.FromError(err)
+		writeError(w, appErr.StatusCode, appErr.Message)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"goal":      req.Goal,
+		"subtasks":  t.Subtasks,
+		"total":     len(t.Subtasks),
+	})
 }
 
 // CreateRequest 创建任务请求
