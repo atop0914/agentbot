@@ -7,6 +7,7 @@ import (
 
 	"github.com/atop0914/agentbot/internal/agent"
 	"github.com/atop0914/agentbot/internal/auth"
+	"github.com/atop0914/agentbot/internal/browser"
 	"github.com/atop0914/agentbot/internal/cloud"
 	"github.com/atop0914/agentbot/internal/communication"
 	"github.com/atop0914/agentbot/internal/executor"
@@ -29,6 +30,7 @@ type App struct {
 	CommH       *communication.Handler
 	WSHub       *websocket.Hub
 	WSHandler   *websocket.Handler
+	BrowserH    *browser.Handler
 }
 
 // New creates a new App with all in-memory services wired up.
@@ -75,6 +77,10 @@ func New() *App {
 	commSvc := communication.NewCommService(commRepo, commBus)
 	commH := communication.NewHandler(commSvc, logger)
 
+	// Browser automation
+	browserRepo := browser.NewMemoryRepository()
+	browserSvc := browser.NewLocalService(browserRepo)
+	browserH := browser.NewHandler(browserSvc)
 	// WebSocket
 	wsHub := websocket.NewHub(logger)
 	go wsHub.Run()
@@ -107,5 +113,6 @@ func New() *App {
 		CommH:       commH,
 		WSHub:       wsHub,
 		WSHandler:   wsHandler,
+		BrowserH:    browserH,
 	}
 }

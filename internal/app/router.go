@@ -33,6 +33,9 @@ func NewRouter(a *App) http.Handler {
 	// WebSocket routes
 	a.WSHandler.RegisterRoutes(mux, "/api/v1")
 
+	// Browser automation routes
+	a.BrowserH.RegisterRoutes(mux)
+
 	// Apply global middleware chain: Recovery → RequestID → CORS → Logging
 	var handler http.Handler = mux
 	handler = loggingMiddleware(a.Logger)(handler)
