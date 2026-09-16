@@ -173,6 +173,11 @@ func (m *LocalManager) Execute(ctx context.Context, sessionID string, req ExecRe
 	local.LastActiveAt = time.Now().UTC()
 	m.mu.Unlock()
 
+	// 检查 context 取消（超时）
+	if ctx.Err() != nil {
+		return nil, fmt.Errorf("command cancelled: %w", ctx.Err())
+	}
+
 	exitCode := 0
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {

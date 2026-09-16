@@ -36,6 +36,9 @@ func NewRouter(a *App) http.Handler {
 	// Browser automation routes
 	a.BrowserH.RegisterRoutes(mux)
 
+	// Terminal execution routes
+	a.TerminalH.RegisterRoutes(mux)
+
 	// Apply global middleware chain: Recovery → RequestID → CORS → Logging
 	var handler http.Handler = mux
 	handler = loggingMiddleware(a.Logger)(handler)

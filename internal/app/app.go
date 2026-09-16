@@ -11,6 +11,7 @@ import (
 	"github.com/atop0914/agentbot/internal/cloud"
 	"github.com/atop0914/agentbot/internal/communication"
 	"github.com/atop0914/agentbot/internal/executor"
+	"github.com/atop0914/agentbot/internal/terminal"
 	"github.com/atop0914/agentbot/internal/user"
 	"github.com/atop0914/agentbot/internal/websocket"
 )
@@ -31,6 +32,7 @@ type App struct {
 	WSHub       *websocket.Hub
 	WSHandler   *websocket.Handler
 	BrowserH    *browser.Handler
+	TerminalH   *terminal.Handler
 }
 
 // New creates a new App with all in-memory services wired up.
@@ -81,6 +83,12 @@ func New() *App {
 	browserRepo := browser.NewMemoryRepository()
 	browserSvc := browser.NewLocalService(browserRepo)
 	browserH := browser.NewHandler(browserSvc)
+
+	// Terminal execution
+	terminalMgr := terminal.NewLocalManager()
+	terminalRepo := terminal.NewMemoryRepository()
+	terminalSvc := terminal.NewService(terminalMgr, terminalRepo)
+	terminalH := terminal.NewHandler(terminalSvc)
 	// WebSocket
 	wsHub := websocket.NewHub(logger)
 	go wsHub.Run()
@@ -114,5 +122,6 @@ func New() *App {
 		WSHub:       wsHub,
 		WSHandler:   wsHandler,
 		BrowserH:    browserH,
+		TerminalH:   terminalH,
 	}
 }
