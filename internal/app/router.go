@@ -39,6 +39,9 @@ func NewRouter(a *App) http.Handler {
 	// Terminal execution routes
 	a.TerminalH.RegisterRoutes(mux)
 
+	// Filesystem routes
+	a.FileSystemH.RegisterRoutes(mux)
+
 	// Apply global middleware chain: Recovery → RequestID → CORS → Logging
 	var handler http.Handler = mux
 	handler = loggingMiddleware(a.Logger)(handler)
