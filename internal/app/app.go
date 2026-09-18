@@ -11,6 +11,7 @@ import (
 	"github.com/atop0914/agentbot/internal/cloud"
 	"github.com/atop0914/agentbot/internal/communication"
 	"github.com/atop0914/agentbot/internal/executor"
+	"github.com/atop0914/agentbot/internal/adapter"
 	"github.com/atop0914/agentbot/internal/filesystem"
 	"github.com/atop0914/agentbot/internal/terminal"
 	"github.com/atop0914/agentbot/internal/user"
@@ -35,6 +36,8 @@ type App struct {
 	BrowserH    *browser.Handler
 	TerminalH   *terminal.Handler
 	FileSystemH *filesystem.Handler
+	AdapterH    *adapter.Handler
+	AdapterSvc  *adapter.Service
 }
 
 // New creates a new App with all in-memory services wired up.
@@ -98,6 +101,13 @@ func New() *App {
 	fsSvc := filesystem.NewService(fsMgr, fsRepo)
 	fsH := filesystem.NewHandler(fsSvc)
 
+	// Application adapters
+	adapterRegistry := adapter.NewMemoryRegistry()
+	adapterRegistry.RegisterFactory(adapter.AdapterTypeEmail, adapter.NewEmailAdapter)
+	adapterRegistry.RegisterFactory(adapter.AdapterTypeCalendar, adapter.NewCalendarAdapter)
+	adapterSvc := adapter.NewService(adapterRegistry)
+	adapterH := adapter.NewHandler(adapterSvc)
+
 	// WebSocket
 	wsHub := websocket.NewHub(logger)
 	go wsHub.Run()
@@ -133,5 +143,7 @@ func New() *App {
 		BrowserH:    browserH,
 		TerminalH:   terminalH,
 		FileSystemH: fsH,
+		AdapterH:    adapterH,
+		AdapterSvc:  adapterSvc,
 	}
 }
