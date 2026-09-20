@@ -351,7 +351,7 @@ func TestLocalService_Recording(t *testing.T) {
 	svc.ExecuteAction(ctx, b.ID, Action{Type: ActionInput, Target: "#input", Value: "test"})
 
 	// Stop recording
-	actions, err := svc.StopRecording(ctx)
+	actions, err := svc.StopRecording(ctx, b.ID)
 	if err != nil {
 		t.Fatalf("StopRecording: %v", err)
 	}

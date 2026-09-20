@@ -214,7 +214,7 @@ func (h *Handler) stopRecording(w http.ResponseWriter, r *http.Request, browserI
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	actions, err := h.svc.(Recorder).StopRecording(r.Context())
+	actions, err := h.svc.(Recorder).StopRecording(r.Context(), browserID)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return

@@ -99,6 +99,6 @@ type Service interface {
 // Recorder records browser actions for replay
 type Recorder interface {
 	StartRecording(ctx context.Context, browserID string) error
-	StopRecording(ctx context.Context) ([]Action, error)
+	StopRecording(ctx context.Context, browserID string) ([]Action, error)
 	ReplayActions(ctx context.Context, browserID string, actions []Action) error
 }
