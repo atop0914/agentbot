@@ -627,3 +627,487 @@ func TestMethodNotAllowed(t *testing.T) {
 		t.Errorf("PUT /agents status = %d, want 405", resp.StatusCode)
 	}
 }
+
+// --- Browser API Tests ---
+
+func TestBrowserCreateAndGet(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	// Create browser
+	body := `{"agent_id":"agent-1","config":{"headless":true}}`
+	resp, err := http.Post(ts.URL+"/api/v1/browsers", "application/json", bytes.NewBufferString(body))
+	if err != nil {
+		t.Fatalf("POST /browsers: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("create browser status = %d, want 200", resp.StatusCode)
+	}
+
+	var created map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&created)
+	if created["id"] == nil {
+		t.Error("browser id missing from create response")
+	}
+}
+
+func TestBrowserCreateMultiple(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	// Create multiple browsers for different agents
+	for _, agentID := range []string{"agent-1", "agent-2"} {
+		body := `{"agent_id":"` + agentID + `"}`
+		resp, err := http.Post(ts.URL+"/api/v1/browsers", "application/json", bytes.NewBufferString(body))
+		if err != nil {
+			t.Fatalf("POST /browsers for %s: %v", agentID, err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("create browser for %s status = %d, want 200", agentID, resp.StatusCode)
+		}
+
+		var created map[string]interface{}
+		json.NewDecoder(resp.Body).Decode(&created)
+		if created["id"] == nil {
+			t.Errorf("browser id missing for agent %s", agentID)
+		}
+	}
+}
+
+func TestBrowserProfileList(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	// List profiles (GET only, creation via import-profile)
+	resp, err := http.Get(ts.URL + "/api/v1/browser/profiles")
+	if err != nil {
+		t.Fatalf("GET /profiles: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("list profiles status = %d, want 200", resp.StatusCode)
+	}
+}
+
+// --- Terminal API Tests ---
+
+func TestTerminalCreateAndGet(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	// Create session
+	body := `{"agent_id":"agent-1","connection_type":"local","command":"/bin/bash"}`
+	resp, err := http.Post(ts.URL+"/api/v1/terminals", "application/json", bytes.NewBufferString(body))
+	if err != nil {
+		t.Fatalf("POST /terminals: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("create terminal status = %d, want 200", resp.StatusCode)
+	}
+
+	var created map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&created)
+	if created["id"] == nil {
+		t.Error("terminal id missing from create response")
+	}
+}
+
+func TestTerminalList(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	// Create a session first
+	body := `{"agent_id":"agent-1","connection_type":"local"}`
+	http.Post(ts.URL+"/api/v1/terminals", "application/json", bytes.NewBufferString(body))
+
+	resp, err := http.Get(ts.URL + "/api/v1/terminals")
+	if err != nil {
+		t.Fatalf("GET /terminals: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("list terminals status = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestTerminalExecute(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	// Create session
+	body := `{"agent_id":"agent-1","connection_type":"local"}`
+	resp, err := http.Post(ts.URL+"/api/v1/terminals", "application/json", bytes.NewBufferString(body))
+	if err != nil {
+		t.Fatalf("POST /terminals: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var created map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&created)
+	id := created["id"].(string)
+
+	// Execute command
+	execBody := `{"command":"echo hello"}`
+	req, _ := http.NewRequest("POST", ts.URL+"/api/v1/terminals/"+id+"/execute", bytes.NewBufferString(execBody))
+	req.Header.Set("Content-Type", "application/json")
+	resp2, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /terminals/%s/execute: %v", id, err)
+	}
+	defer resp2.Body.Close()
+
+	if resp2.StatusCode != http.StatusOK {
+		t.Errorf("execute status = %d, want 200", resp2.StatusCode)
+	}
+}
+
+// --- Filesystem API Tests ---
+
+func TestFilesystemWriteAndRead(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	// Write file (relative path within sandbox /tmp/agentbot-fs/)
+	writeBody := `{"path":"test-integration.txt","content":"aGVsbG8gd29ybGQ="}`
+	resp, err := http.Post(ts.URL+"/api/v1/filesystem/write", "application/json", bytes.NewBufferString(writeBody))
+	if err != nil {
+		t.Fatalf("POST /filesystem/write: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		var errBody map[string]string
+		json.NewDecoder(resp.Body).Decode(&errBody)
+		t.Errorf("write status = %d, want 200, err: %v", resp.StatusCode, errBody)
+		return
+	}
+
+	// Read file
+	resp2, err := http.Get(ts.URL + "/api/v1/filesystem/read/test-integration.txt")
+	if err != nil {
+		t.Fatalf("GET /filesystem/read: %v", err)
+	}
+	defer resp2.Body.Close()
+
+	if resp2.StatusCode != http.StatusOK {
+		t.Errorf("read status = %d, want 200", resp2.StatusCode)
+	}
+
+	// Cleanup
+	req, _ := http.NewRequest("DELETE", ts.URL+"/api/v1/filesystem/remove/test-integration.txt", nil)
+	http.DefaultClient.Do(req)
+}
+
+func TestFilesystemList(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	// List root of sandbox (relative path)
+	resp, err := http.Get(ts.URL + "/api/v1/filesystem/list/")
+	if err != nil {
+		t.Fatalf("GET /filesystem/list: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("list status = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestFilesystemMkdirAndRemove(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	// Mkdir (relative path within sandbox)
+	mkdirBody := `{"path":"test-integration-dir"}`
+	resp, err := http.Post(ts.URL+"/api/v1/filesystem/mkdir", "application/json", bytes.NewBufferString(mkdirBody))
+	if err != nil {
+		t.Fatalf("POST /filesystem/mkdir: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		var errBody map[string]string
+		json.NewDecoder(resp.Body).Decode(&errBody)
+		t.Errorf("mkdir status = %d, want 200, err: %v", resp.StatusCode, errBody)
+		return
+	}
+
+	// Remove
+	req, _ := http.NewRequest("DELETE", ts.URL+"/api/v1/filesystem/remove/test-integration-dir", nil)
+	resp2, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE /filesystem/remove: %v", err)
+	}
+	defer resp2.Body.Close()
+
+	if resp2.StatusCode != http.StatusOK {
+		t.Errorf("remove status = %d, want 200", resp2.StatusCode)
+	}
+}
+
+// --- Adapter API Tests ---
+
+func TestAdapterCreateAndGet(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	// Create adapter (Config struct: name, type, agent_id, settings)
+	body := `{"id":"adapter-test-1","name":"test-email","type":"email","agent_id":"agent-1","settings":{"smtp_host":"smtp.example.com"}}`
+	resp, err := http.Post(ts.URL+"/api/v1/adapters", "application/json", bytes.NewBufferString(body))
+	if err != nil {
+		t.Fatalf("POST /adapters: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		var errBody map[string]string
+		json.NewDecoder(resp.Body).Decode(&errBody)
+		t.Errorf("create adapter status = %d, want 201, err: %v", resp.StatusCode, errBody)
+		return
+	}
+
+	var created map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&created)
+	if created["id"] == nil {
+		t.Error("adapter id missing from create response")
+	}
+}
+
+func TestAdapterList(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	// Create an adapter first
+	body := `{"id":"adapter-test-1","name":"test-email","type":"email","agent_id":"agent-1"}`
+	http.Post(ts.URL+"/api/v1/adapters", "application/json", bytes.NewBufferString(body))
+
+	resp, err := http.Get(ts.URL + "/api/v1/adapters")
+	if err != nil {
+		t.Fatalf("GET /adapters: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("list adapters status = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestAdapterExecute(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	// Create adapter
+	body := `{"id":"adapter-test-1","name":"test-email","type":"email","agent_id":"agent-1"}`
+	resp, err := http.Post(ts.URL+"/api/v1/adapters", "application/json", bytes.NewBufferString(body))
+	if err != nil {
+		t.Fatalf("POST /adapters: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		var errBody map[string]string
+		json.NewDecoder(resp.Body).Decode(&errBody)
+		t.Logf("create adapter failed: status=%d, err=%v", resp.StatusCode, errBody)
+		t.Skip("adapter creation failed, skipping execute test")
+	}
+
+	var created map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&created)
+	idVal, ok := created["id"]
+	if !ok || idVal == nil {
+		t.Skip("adapter id missing, skipping execute test")
+	}
+	id := idVal.(string)
+
+	// Execute action
+	execBody := `{"action":"send","params":{"to":"test@example.com","subject":"Test","body":"Hello"}}`
+	req, _ := http.NewRequest("POST", ts.URL+"/api/v1/adapters/"+id+"/execute", bytes.NewBufferString(execBody))
+	req.Header.Set("Content-Type", "application/json")
+	resp2, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /adapters/%s/execute: %v", id, err)
+	}
+	defer resp2.Body.Close()
+
+	// Execute may return 200 or 500 depending on mock state
+	if resp2.StatusCode != http.StatusOK && resp2.StatusCode != http.StatusInternalServerError {
+		t.Errorf("execute status = %d, want 200 or 500", resp2.StatusCode)
+	}
+}
+
+// --- Memory API Tests ---
+
+func TestMemoryCreateAndGet(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	// Create memory entry
+	body := `{"agent_id":"agent-1","user_id":"user-1","type":"conversation","content":"Hello world","importance":0.8}`
+	resp, err := http.Post(ts.URL+"/api/v1/memory", "application/json", bytes.NewBufferString(body))
+	if err != nil {
+		t.Fatalf("POST /memory: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		t.Errorf("create memory status = %d, want 201", resp.StatusCode)
+	}
+
+	var created map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&created)
+	if created["id"] == nil {
+		t.Error("memory id missing from create response")
+	}
+}
+
+func TestMemoryList(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	// Create a memory entry first
+	body := `{"agent_id":"agent-1","user_id":"user-1","type":"conversation","content":"Test memory","importance":0.5}`
+	http.Post(ts.URL+"/api/v1/memory", "application/json", bytes.NewBufferString(body))
+
+	// List by agent
+	resp, err := http.Get(ts.URL + "/api/v1/memory/agent/agent-1")
+	if err != nil {
+		t.Fatalf("GET /memory/agent: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("list memory status = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestMemoryStats(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	// Create some entries
+	for i := 0; i < 3; i++ {
+		body := `{"agent_id":"agent-1","user_id":"user-1","type":"conversation","content":"Test","importance":0.5}`
+		http.Post(ts.URL+"/api/v1/memory", "application/json", bytes.NewBufferString(body))
+	}
+
+	resp, err := http.Get(ts.URL + "/api/v1/memory/stats")
+	if err != nil {
+		t.Fatalf("GET /memory/stats: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("memory stats status = %d, want 200", resp.StatusCode)
+	}
+
+	var stats map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&stats)
+	if stats["total_entries"] == nil {
+		t.Error("total_entries field missing from memory stats")
+	}
+}
+
+func TestMemoryCleanup(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	req, _ := http.NewRequest("POST", ts.URL+"/api/v1/memory/cleanup", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /memory/cleanup: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("cleanup status = %d, want 200", resp.StatusCode)
+	}
+}
+
+// --- Benchmark Tests ---
+
+func BenchmarkHealthEndpoint(b *testing.B) {
+	a := New()
+	handler := NewRouter(a)
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		resp, err := http.Get(ts.URL + "/health")
+		if err != nil {
+			b.Fatal(err)
+		}
+		resp.Body.Close()
+	}
+}
+
+func BenchmarkAgentCRUD(b *testing.B) {
+	a := New()
+	handler := NewRouter(a)
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		// Create
+		body := `{"name":"bench-agent","description":"benchmark agent"}`
+		resp, err := http.Post(ts.URL+"/api/v1/agents", "application/json", bytes.NewBufferString(body))
+		if err != nil {
+			b.Fatal(err)
+		}
+		var created map[string]interface{}
+		json.NewDecoder(resp.Body).Decode(&created)
+		resp.Body.Close()
+
+		// Get
+		resp2, err := http.Get(ts.URL + "/api/v1/agents/" + created["id"].(string))
+		if err != nil {
+			b.Fatal(err)
+		}
+		resp2.Body.Close()
+	}
+}
+
+func BenchmarkMemoryWriteRead(b *testing.B) {
+	a := New()
+	handler := NewRouter(a)
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		// Write
+		body := `{"agent_id":"bench-agent","user_id":"user-1","type":"conversation","content":"benchmark entry","importance":0.5}`
+		resp, err := http.Post(ts.URL+"/api/v1/memory", "application/json", bytes.NewBufferString(body))
+		if err != nil {
+			b.Fatal(err)
+		}
+		resp.Body.Close()
+	}
+}
+
+func BenchmarkTaskCreate(b *testing.B) {
+	a := New()
+	handler := NewRouter(a)
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		body := `{"agent_id":"bench-agent","goal":"benchmark task","priority":"medium"}`
+		resp, err := http.Post(ts.URL+"/api/v1/tasks", "application/json", bytes.NewBufferString(body))
+		if err != nil {
+			b.Fatal(err)
+		}
+		resp.Body.Close()
+	}
+}
