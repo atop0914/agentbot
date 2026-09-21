@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/atop0914/agentbot/internal/agent"
 	"github.com/atop0914/agentbot/internal/auth"
@@ -32,6 +33,8 @@ type App struct {
 	TaskMgr     *executor.Handler
 	Comm        *communication.CommService
 	CommH       *communication.Handler
+	Presence    *communication.PresenceManager
+	Messenger   *communication.AgentMessengerImpl
 	WSHub       *websocket.Hub
 	WSHandler   *websocket.Handler
 	BrowserH    *browser.Handler
@@ -85,6 +88,13 @@ func New() *App {
 	commBus := communication.NewMemoryBus()
 	commSvc := communication.NewCommService(commRepo, commBus)
 	commH := communication.NewHandler(commSvc, logger)
+
+	// Presence manager (30s heartbeat timeout)
+	presence := communication.NewPresenceManager(30 * time.Second)
+
+	// Agent messenger with request-response protocol
+	messengerCfg := communication.DefaultMessengerConfig()
+	messenger := communication.NewAgentMessenger(messengerCfg, commBus, presence, commRepo)
 
 	// Browser automation
 	browserRepo := browser.NewMemoryRepository()
@@ -145,6 +155,8 @@ func New() *App {
 		TaskMgr:     taskH,
 		Comm:        commSvc,
 		CommH:       commH,
+		Presence:    presence,
+		Messenger:   messenger,
 		WSHub:       wsHub,
 		WSHandler:   wsHandler,
 		BrowserH:    browserH,
