@@ -15,6 +15,7 @@ import (
 	"github.com/atop0914/agentbot/internal/adapter"
 	"github.com/atop0914/agentbot/internal/filesystem"
 	"github.com/atop0914/agentbot/internal/memory"
+	"github.com/atop0914/agentbot/internal/role"
 	"github.com/atop0914/agentbot/internal/terminal"
 	"github.com/atop0914/agentbot/internal/user"
 	"github.com/atop0914/agentbot/internal/websocket"
@@ -43,6 +44,8 @@ type App struct {
 	AdapterH    *adapter.Handler
 	AdapterSvc  *adapter.Service
 	MemoryH     *memory.Handler
+	RoleSvc     role.Service
+	RoleH       *role.Handler
 }
 
 // New creates a new App with all in-memory services wired up.
@@ -125,6 +128,11 @@ func New() *App {
 	memorySvc := memory.NewMemoryService(memoryStore)
 	memoryH := memory.NewHandler(memorySvc)
 
+	// Role system
+	roleRepo := role.NewMemoryRepository()
+	roleSvc := role.NewService(roleRepo)
+	roleH := role.NewHandler(roleSvc)
+
 	// WebSocket
 	wsHub := websocket.NewHub(logger)
 	go wsHub.Run()
@@ -165,5 +173,7 @@ func New() *App {
 		AdapterH:    adapterH,
 		AdapterSvc:  adapterSvc,
 		MemoryH:     memoryH,
+		RoleSvc:     roleSvc,
+		RoleH:       roleH,
 	}
 }

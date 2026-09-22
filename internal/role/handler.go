@@ -20,7 +20,7 @@ func NewHandler(svc Service) *Handler {
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/roles", h.handleRoles)
 	mux.HandleFunc("/api/v1/roles/", h.handleRoleByID)
-	mux.HandleFunc("/api/v1/agents/", h.handleAgentRoles)
+	mux.HandleFunc("/api/v1/role-assignments/", h.handleAgentRoles)
 	mux.HandleFunc("/api/v1/permissions/check", h.handlePermissionCheck)
 	mux.HandleFunc("/api/v1/permissions", h.handleListPermissions)
 }
@@ -57,14 +57,8 @@ func (h *Handler) handleRoleByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleAgentRoles(w http.ResponseWriter, r *http.Request) {
-	// Path: /api/v1/agents/{id}/roles
-	path := strings.TrimPrefix(r.URL.Path, "/api/v1/agents/")
-	parts := strings.SplitN(path, "/", 2)
-	if len(parts) < 2 || parts[1] != "roles" {
-		http.NotFound(w, r)
-		return
-	}
-	agentID := parts[0]
+	// Path: /api/v1/role-assignments/{agentID}
+	agentID := strings.TrimPrefix(r.URL.Path, "/api/v1/role-assignments/")
 	if agentID == "" {
 		http.Error(w, "agent ID required", http.StatusBadRequest)
 		return
