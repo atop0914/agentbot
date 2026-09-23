@@ -51,6 +51,9 @@ func NewRouter(a *App) http.Handler {
 	// Role system routes
 	a.RoleH.RegisterRoutes(mux)
 
+	// Template & workflow recording routes
+	a.TemplateH.RegisterRoutes(mux)
+
 	// Apply global middleware chain: Recovery → RequestID → CORS → Logging
 	var handler http.Handler = mux
 	handler = loggingMiddleware(a.Logger)(handler)
