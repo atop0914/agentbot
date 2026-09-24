@@ -45,9 +45,10 @@ type App struct {
 	AdapterH    *adapter.Handler
 	AdapterSvc  *adapter.Service
 	MemoryH     *memory.Handler
-	RoleSvc     role.Service
-	RoleH       *role.Handler
-	TemplateH   *template.Handler
+	RoleSvc        role.Service
+	RoleH          *role.Handler
+	TemplateH      *template.Handler
+	MarketplaceH   *template.MarketplaceHandler
 }
 
 // New creates a new App with all in-memory services wired up.
@@ -142,6 +143,12 @@ func New() *App {
 	tmplRecorder := template.NewInMemoryRecorder(tmplRepo)
 	tmplH := template.NewHandler(tmplSvc, tmplRecorder)
 
+	// Marketplace
+	marketplaceRepo := template.NewInMemoryMarketplaceRepo()
+	reviewRepo := template.NewInMemoryReviewRepo()
+	marketplaceSvc := template.NewMarketplaceService(marketplaceRepo, reviewRepo, tmplRepo)
+	marketplaceH := template.NewMarketplaceHandler(marketplaceSvc)
+
 	// WebSocket
 	wsHub := websocket.NewHub(logger)
 	go wsHub.Run()
@@ -183,7 +190,8 @@ func New() *App {
 		AdapterSvc:  adapterSvc,
 		MemoryH:     memoryH,
 		RoleSvc:     roleSvc,
-		RoleH:       roleH,
-		TemplateH:   tmplH,
+		RoleH:          roleH,
+		TemplateH:      tmplH,
+		MarketplaceH:   marketplaceH,
 	}
 }
