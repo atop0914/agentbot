@@ -6,49 +6,52 @@ import (
 	"os"
 	"time"
 
+	"github.com/atop0914/agentbot/internal/adapter"
 	"github.com/atop0914/agentbot/internal/agent"
 	"github.com/atop0914/agentbot/internal/auth"
 	"github.com/atop0914/agentbot/internal/browser"
 	"github.com/atop0914/agentbot/internal/cloud"
 	"github.com/atop0914/agentbot/internal/communication"
 	"github.com/atop0914/agentbot/internal/executor"
-	"github.com/atop0914/agentbot/internal/adapter"
 	"github.com/atop0914/agentbot/internal/filesystem"
 	"github.com/atop0914/agentbot/internal/memory"
+	"github.com/atop0914/agentbot/internal/monitor"
 	"github.com/atop0914/agentbot/internal/role"
+	"github.com/atop0914/agentbot/internal/template"
 	"github.com/atop0914/agentbot/internal/terminal"
 	"github.com/atop0914/agentbot/internal/user"
-	"github.com/atop0914/agentbot/internal/template"
 	"github.com/atop0914/agentbot/internal/websocket"
 )
 
 // App holds all application dependencies
 type App struct {
-	Logger      *slog.Logger
-	Auth        *auth.Service
-	AuthHandler *auth.Handler
-	AuthMW      *auth.Middleware
-	Agent       agent.Service
-	AgentH      *agent.Handler
-	Cloud       *cloud.Service
-	CloudH      *cloud.Handler
-	TaskMgr     *executor.Handler
-	Comm        *communication.CommService
-	CommH       *communication.Handler
-	Presence    *communication.PresenceManager
-	Messenger   *communication.AgentMessengerImpl
-	WSHub       *websocket.Hub
-	WSHandler   *websocket.Handler
-	BrowserH    *browser.Handler
-	TerminalH   *terminal.Handler
-	FileSystemH *filesystem.Handler
-	AdapterH    *adapter.Handler
-	AdapterSvc  *adapter.Service
-	MemoryH     *memory.Handler
-	RoleSvc        role.Service
-	RoleH          *role.Handler
-	TemplateH      *template.Handler
-	MarketplaceH   *template.MarketplaceHandler
+	Logger       *slog.Logger
+	Auth         *auth.Service
+	AuthHandler  *auth.Handler
+	AuthMW       *auth.Middleware
+	Agent        agent.Service
+	AgentH       *agent.Handler
+	Cloud        *cloud.Service
+	CloudH       *cloud.Handler
+	TaskMgr      *executor.Handler
+	Comm         *communication.CommService
+	CommH        *communication.Handler
+	Presence     *communication.PresenceManager
+	Messenger    *communication.AgentMessengerImpl
+	WSHub        *websocket.Hub
+	WSHandler    *websocket.Handler
+	BrowserH     *browser.Handler
+	TerminalH    *terminal.Handler
+	FileSystemH  *filesystem.Handler
+	AdapterH     *adapter.Handler
+	AdapterSvc   *adapter.Service
+	MemoryH      *memory.Handler
+	RoleSvc      role.Service
+	RoleH        *role.Handler
+	TemplateH    *template.Handler
+	MarketplaceH *template.MarketplaceHandler
+	MonitorSvc   monitor.Service
+	MonitorH     *monitor.Handler
 }
 
 // New creates a new App with all in-memory services wired up.
@@ -149,6 +152,11 @@ func New() *App {
 	marketplaceSvc := template.NewMarketplaceService(marketplaceRepo, reviewRepo, tmplRepo)
 	marketplaceH := template.NewMarketplaceHandler(marketplaceSvc)
 
+	// Monitoring (agent health & alerts)
+	monitorRepo := monitor.NewMemoryRepository()
+	monitorSvc := monitor.NewService(monitorRepo)
+	monitorH := monitor.NewHandler(monitorSvc)
+
 	// WebSocket
 	wsHub := websocket.NewHub(logger)
 	go wsHub.Run()
@@ -168,30 +176,32 @@ func New() *App {
 	}
 
 	return &App{
-		Logger:      logger,
-		Auth:        authSvc,
-		AuthHandler: authHandler,
-		AuthMW:      authMW,
-		Agent:       agentSvc,
-		AgentH:      agentH,
-		Cloud:       cloudSvc,
-		CloudH:      cloudH,
-		TaskMgr:     taskH,
-		Comm:        commSvc,
-		CommH:       commH,
-		Presence:    presence,
-		Messenger:   messenger,
-		WSHub:       wsHub,
-		WSHandler:   wsHandler,
-		BrowserH:    browserH,
-		TerminalH:   terminalH,
-		FileSystemH: fsH,
-		AdapterH:    adapterH,
-		AdapterSvc:  adapterSvc,
-		MemoryH:     memoryH,
-		RoleSvc:     roleSvc,
-		RoleH:          roleH,
-		TemplateH:      tmplH,
-		MarketplaceH:   marketplaceH,
+		Logger:       logger,
+		Auth:         authSvc,
+		AuthHandler:  authHandler,
+		AuthMW:       authMW,
+		Agent:        agentSvc,
+		AgentH:       agentH,
+		Cloud:        cloudSvc,
+		CloudH:       cloudH,
+		TaskMgr:      taskH,
+		Comm:         commSvc,
+		CommH:        commH,
+		Presence:     presence,
+		Messenger:    messenger,
+		WSHub:        wsHub,
+		WSHandler:    wsHandler,
+		BrowserH:     browserH,
+		TerminalH:    terminalH,
+		FileSystemH:  fsH,
+		AdapterH:     adapterH,
+		AdapterSvc:   adapterSvc,
+		MemoryH:      memoryH,
+		RoleSvc:      roleSvc,
+		RoleH:        roleH,
+		TemplateH:    tmplH,
+		MarketplaceH: marketplaceH,
+		MonitorSvc:   monitorSvc,
+		MonitorH:     monitorH,
 	}
 }
