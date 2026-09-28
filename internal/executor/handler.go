@@ -145,9 +145,9 @@ func (h *Handler) handleDecompose(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"goal":      req.Goal,
-		"subtasks":  t.Subtasks,
-		"total":     len(t.Subtasks),
+		"goal":     req.Goal,
+		"subtasks": t.Subtasks,
+		"total":    len(t.Subtasks),
 	})
 }
 

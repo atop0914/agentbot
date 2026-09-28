@@ -18,8 +18,8 @@ const (
 
 // QueueItem 任务队列元素
 type QueueItem struct {
-	TaskID   string
-	Priority Priority
+	TaskID     string
+	Priority   Priority
 	EnqueuedAt time.Time
 }
 

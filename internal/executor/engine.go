@@ -11,21 +11,21 @@ import (
 
 // ExecutionEngine 任务执行引擎
 type ExecutionEngine struct {
-	mu       sync.RWMutex
-	config   EngineConfig
-	repo     Repository
-	queue    *taskQueue
-	agents   map[string]*agentSlot // agentID -> slot
-	running  map[string]context.CancelFunc
-	stopCh   chan struct{}
-	stopped  bool
+	mu      sync.RWMutex
+	config  EngineConfig
+	repo    Repository
+	queue   *taskQueue
+	agents  map[string]*agentSlot // agentID -> slot
+	running map[string]context.CancelFunc
+	stopCh  chan struct{}
+	stopped bool
 }
 
 // agentSlot Agent 执行槽位
 type agentSlot struct {
-	AgentID    string
+	AgentID     string
 	CurrentTask string
-	Busy       bool
+	Busy        bool
 }
 
 // NewEngine 创建执行引擎

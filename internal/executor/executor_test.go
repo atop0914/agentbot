@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -602,11 +603,22 @@ func TestHandler_MethodNotAllowed(t *testing.T) {
 // --- 观察者测试 ---
 
 type testObserver struct {
+	mu     sync.Mutex
 	events []TaskEvent
 }
 
+// OnTaskEvent 由 notify 直接调用（Start 的异步 goroutine 也会触发），
+// 因此必须自行加锁：testing 的 -race 会把未同步的切片追加判为数据竞争。
 func (o *testObserver) OnTaskEvent(event TaskEvent) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
 	o.events = append(o.events, event)
+}
+
+func (o *testObserver) snapshot() []TaskEvent {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]TaskEvent(nil), o.events...)
 }
 
 func TestTaskService_ObserverNotified(t *testing.T) {
@@ -617,19 +629,41 @@ func TestTaskService_ObserverNotified(t *testing.T) {
 
 	created, _ := svc.Create(ctx, "agent-1", "test")
 	svc.Start(ctx, created.ID)
+
+	// Start 会启动异步执行 goroutine，它可能先于 Complete 把任务写成终态，
+	// 让 Complete 失败。这里等待 Start 的 in_progress 事件落地后再推进状态。
+	waitForEvent(t, obs, func(events []TaskEvent) bool {
+		return len(events) >= 1 && events[0].NewState == task.StateInProgress
+	})
+
 	svc.Complete(ctx, created.ID, "done")
 
 	// Create 不触发事件，Start 和 Complete 各触发一次
-	if len(obs.events) != 2 {
-		t.Fatalf("expected 2 events, got %d", len(obs.events))
+	events := obs.snapshot()
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events, got %d (%+v)", len(events), events)
 	}
 
-	if obs.events[0].NewState != task.StateInProgress {
-		t.Errorf("expected first event in_progress, got %s", obs.events[0].NewState)
+	if events[0].NewState != task.StateInProgress {
+		t.Errorf("expected first event in_progress, got %s", events[0].NewState)
 	}
-	if obs.events[1].NewState != task.StateCompleted {
-		t.Errorf("expected second event completed, got %s", obs.events[1].NewState)
+	if events[1].NewState != task.StateCompleted {
+		t.Errorf("expected second event completed, got %s", events[1].NewState)
 	}
+}
+
+// waitForEvent 轮询等待观察者收集到满足条件的事件，超时则直接失败。
+// 用于消除"异步 goroutine 尚未执行完就断言"导致的偶发失败。
+func waitForEvent(t *testing.T, obs *testObserver, cond func([]TaskEvent) bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond(obs.snapshot()) {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("timeout waiting for observer event, got %+v", obs.snapshot())
 }
 
 // --- 依赖测试 ---

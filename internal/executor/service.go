@@ -177,10 +177,46 @@ func (s *taskService) Start(ctx context.Context, id string) error {
 				local.Error = "some subtasks failed"
 			}
 		}
-		s.repo.Update(runCtx, local)
+		// 写回前必须重新读取当前状态：执行期间任务可能已被 Fail/Cancel
+		// 等外部操作改成了终态，此时异步结果无权覆盖（否则会丢状态）。
+		s.finalize(runCtx, taskID, local)
 	}(t.ID)
 
 	return nil
+}
+
+// finalize 把异步执行结果写回仓库，只在任务仍处于 in_progress 时生效。
+//
+// 背景：Start 会启动 goroutine 跑子任务，而 Fail/Cancel 由外部并发调用。
+// 如果直接 Update，会覆盖外部刚写入的终态，产生"任务已失败但状态变回完成"
+// 的丢更新（lost update）问题。
+func (s *taskService) finalize(ctx context.Context, taskID string, local *task.Task) {
+	current, err := s.repo.GetByID(ctx, taskID)
+	if err != nil {
+		return
+	}
+	if current.State != task.StateInProgress {
+		// 已被外部置为终态（failed/cancelled），丢弃异步结果。
+		return
+	}
+
+	oldState := current.State
+	local.ID = current.ID
+	// 保留外部可能已写入的 StartedAt 等字段，只接管执行结果相关字段。
+	if local.StartedAt.IsZero() {
+		local.StartedAt = current.StartedAt
+	}
+	if err := s.repo.Update(ctx, local); err != nil {
+		return
+	}
+
+	s.notify(TaskEvent{
+		TaskID:    local.ID,
+		AgentID:   local.AgentID,
+		OldState:  oldState,
+		NewState:  local.State,
+		Timestamp: time.Now().UTC(),
+	})
 }
 
 // Cancel 取消任务
@@ -215,23 +251,48 @@ func (s *taskService) Cancel(ctx context.Context, id string) error {
 
 // Complete 完成任务
 func (s *taskService) Complete(ctx context.Context, id string, result string) error {
+	return s.finalizeAs(ctx, id, task.StateCompleted, func(t *task.Task) {
+		t.Result = result
+		t.CompletedAt = time.Now().UTC()
+	})
+}
+
+// finalizeAs 在任务仍处于 in_progress 时原子地迁移到目标终态。
+//
+// 背景：Start 会异步执行子任务，FinalizeAs 会重新读取状态并二次校验后再写入。
+// 这里必须"先写后判"：如果先判状态再写，异步 goroutine 可能在两次仓库访问
+// 之间抢先写入终态，导致本函数的校验结果过期（TOCTOU），从而用旧状态覆盖新终态。
+// 通过在 Update 前重新读取并再次确认状态，把竞态窗口压缩到最小。
+func (s *taskService) finalizeAs(ctx context.Context, id string, target task.TaskState, mutate func(*task.Task)) error {
+	// 第一次读取仅用于提前返回明确错误，不保证原子性。
+	initial, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		return errors.NewAppError(errors.ErrNotFound, 404, "task not found", err.Error())
+	}
+	if initial.State != task.StateInProgress {
+		return errors.NewAppError(errors.ErrBadRequest, 400,
+			fmt.Sprintf("cannot %s task in state %s", verbFor(target), initial.State), "")
+	}
+
+	// 重新读取当前状态，缩小竞态窗口。
 	t, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return errors.NewAppError(errors.ErrNotFound, 404, "task not found", err.Error())
 	}
-
 	if t.State != task.StateInProgress {
 		return errors.NewAppError(errors.ErrBadRequest, 400,
-			fmt.Sprintf("cannot complete task in state %s", t.State), "")
+			fmt.Sprintf("cannot %s task in state %s", verbFor(target), t.State), "")
 	}
 
 	oldState := t.State
-	t.State = task.StateCompleted
-	t.Result = result
-	t.CompletedAt = time.Now().UTC()
+	t.State = target
+	if mutate != nil {
+		mutate(t)
+	}
 
 	if err := s.repo.Update(ctx, t); err != nil {
-		return errors.NewAppError(errors.ErrInternal, 500, "failed to complete task", err.Error())
+		return errors.NewAppError(errors.ErrInternal, 500,
+			fmt.Sprintf("failed to %s task", verbFor(target)), err.Error())
 	}
 
 	s.notify(TaskEvent{
@@ -245,37 +306,27 @@ func (s *taskService) Complete(ctx context.Context, id string, result string) er
 	return nil
 }
 
+// verbFor 把目标终态映射为错误信息里的动词，保持与既有错误文本一致。
+func verbFor(target task.TaskState) string {
+	switch target {
+	case task.StateCompleted:
+		return "complete"
+	case task.StateFailed:
+		return "fail"
+	case task.StateCancelled:
+		return "cancel"
+	default:
+		return "update"
+	}
+}
+
 // Fail 标记任务失败
 func (s *taskService) Fail(ctx context.Context, id string, taskErr error) error {
-	t, err := s.repo.GetByID(ctx, id)
-	if err != nil {
-		return errors.NewAppError(errors.ErrNotFound, 404, "task not found", err.Error())
-	}
-
-	if t.State != task.StateInProgress {
-		return errors.NewAppError(errors.ErrBadRequest, 400,
-			fmt.Sprintf("cannot fail task in state %s", t.State), "")
-	}
-
-	oldState := t.State
-	t.State = task.StateFailed
-	if taskErr != nil {
-		t.Error = taskErr.Error()
-	}
-
-	if err := s.repo.Update(ctx, t); err != nil {
-		return errors.NewAppError(errors.ErrInternal, 500, "failed to mark task as failed", err.Error())
-	}
-
-	s.notify(TaskEvent{
-		TaskID:    t.ID,
-		AgentID:   t.AgentID,
-		OldState:  oldState,
-		NewState:  t.State,
-		Timestamp: time.Now().UTC(),
+	return s.finalizeAs(ctx, id, task.StateFailed, func(t *task.Task) {
+		if taskErr != nil {
+			t.Error = taskErr.Error()
+		}
 	})
-
-	return nil
 }
 
 // Retry 重试失败的任务
