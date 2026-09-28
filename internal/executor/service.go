@@ -150,6 +150,13 @@ func (s *taskService) Start(ctx context.Context, id string) error {
 		Timestamp: time.Now().UTC(),
 	})
 
+	// 无子任务时没有可执行的异步工作，直接保持 in_progress 由调用方决定终态。
+	// （否则异步 goroutine 会把任务立刻写成 completed，与调用方的
+	// Complete/Fail 形成不可避免的竞态。）
+	if len(t.Subtasks) == 0 {
+		return nil
+	}
+
 	// 异步执行子任务（加载独立副本避免与 Retry/Cancel 竞争）
 	go func(taskID string) {
 		runCtx := context.Background()

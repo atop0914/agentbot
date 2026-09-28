@@ -251,18 +251,17 @@ func TestTaskService_StartAndComplete(t *testing.T) {
 		t.Fatalf("Start failed: %v", err)
 	}
 
-	// Start 会异步跑完子任务，任务可能已经落地为终态，
-	// 因此这里只断言它已离开 pending。
 	got, _ := svc.Get(ctx, created.ID)
-	if got.State == task.StatePending {
-		t.Errorf("expected task to leave pending, got %s", got.State)
+	if got.State != task.StateInProgress {
+		t.Errorf("expected in_progress, got %s", got.State)
 	}
 
-	// Start 会异步跑完子任务并写入终态，二者存在竞态：
-	// 若异步执行器先落地，Complete 会因为已处于终态而失败，属预期行为。
-	// 这里用一个无法被异步执行器推进的任务来独立验证 Complete 的语义。
+	// 无子任务的任务不会被异步执行器推进，Complete 的返回值得以确定断言。
 	usingComplete, _ := svc.Create(ctx, "agent-1", "noop")
-	svc.Start(ctx, usingComplete.ID)
+	usingComplete.Subtasks = nil
+	if err := svc.Start(ctx, usingComplete.ID); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
 	if err := svc.Complete(ctx, usingComplete.ID, "done!"); err != nil {
 		t.Fatalf("Complete failed: %v", err)
 	}
@@ -273,12 +272,6 @@ func TestTaskService_StartAndComplete(t *testing.T) {
 	}
 	if done.Result != "done!" {
 		t.Errorf("expected result 'done!', got %s", done.Result)
-	}
-
-	// 原任务：已离开 pending（进入执行中或已落地为终态），绝不能仍是 pending
-	final, _ := svc.Get(ctx, created.ID)
-	if final.State == task.StatePending {
-		t.Errorf("task should have left pending, got %s", final.State)
 	}
 }
 
@@ -304,13 +297,9 @@ func TestTaskService_FailAndRetry(t *testing.T) {
 	svc := NewService(repo)
 	ctx := context.Background()
 
-	// 使用无子任务的任务，避免 Start 的异步执行器抢先落地终态
-	// （有子任务时异步执行器也会写 completed，使 Fail 报 "cannot fail in state completed"）。
+	// 使用无子任务的任务：无异步执行器参与，Fail 的状态迁移可确定断言。
 	created, _ := svc.Create(ctx, "agent-1", "test")
 	created.Subtasks = nil
-	if err := repo.Update(ctx, created); err != nil {
-		t.Fatalf("Update failed: %v", err)
-	}
 	if err := svc.Start(ctx, created.ID); err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -650,66 +639,30 @@ func TestTaskService_ObserverNotified(t *testing.T) {
 	svc := NewServiceWithObservers(repo, obs)
 	ctx := context.Background()
 
+	// 无子任务 => Start 不启动异步执行器，事件序列完全确定。
 	created, _ := svc.Create(ctx, "agent-1", "test")
-	svc.Start(ctx, created.ID)
+	created.Subtasks = nil
+	if err := svc.Start(ctx, created.ID); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	if err := svc.Complete(ctx, created.ID, "done"); err != nil {
+		t.Fatalf("Complete failed: %v", err)
+	}
 
-	// Start 会启动异步执行 goroutine，它可能先于 Complete 把任务写成终态，
-	// 让 Complete 失败。这里等待 Start 的 in_progress 事件落地后再推进状态。
-	waitForEvent(t, obs, func(events []TaskEvent) bool {
-		return len(events) >= 1 && events[0].NewState == task.StateInProgress
-	})
-
-	svc.Complete(ctx, created.ID, "done")
-
-	// Create 不触发事件。Start 与异步执行器谁先写入终态取决于调度：
-	// 若异步执行器先完成，则事件为 in_progress -> completed(异步)，
-	// 此时 Complete 会因为状态已是终态而失败、不产生第三个事件。
-	// 因此只断言"事件序列合法"，不对具体条数做死断言。
+	// Create 不触发事件，Start 和 Complete 各触发一次
 	events := obs.snapshot()
-	if len(events) < 2 {
-		t.Fatalf("expected at least 2 events, got %d (%+v)", len(events), events)
-	}
-	if len(events) > 3 {
-		t.Fatalf("expected at most 3 events, got %d (%+v)", len(events), events)
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events, got %d (%+v)", len(events), events)
 	}
 
-	if events[0].NewState != task.StateInProgress {
-		t.Errorf("expected first event in_progress, got %s", events[0].NewState)
+	if events[0].OldState != task.StatePending || events[0].NewState != task.StateInProgress {
+		t.Errorf("event 0 = %s -> %s, want pending -> in_progress",
+			events[0].OldState, events[0].NewState)
 	}
-	last := events[len(events)-1]
-	if last.NewState != task.StateCompleted {
-		t.Errorf("expected last event completed, got %s", last.NewState)
+	if events[1].OldState != task.StateInProgress || events[1].NewState != task.StateCompleted {
+		t.Errorf("event 1 = %s -> %s, want in_progress -> completed",
+			events[1].OldState, events[1].NewState)
 	}
-	// 事件序列必须自洽：起点来自 pending，且每条事件的 old_state 都是合法前置状态。
-	// 注意不能要求 events[i-1].new_state == events[i].old_state：
-	// Start 与异步执行器是并发写的，中间那个 in_progress -> completed 可能被
-	// Complete 抢先观测为 in_progress（不同字段来自不同副本），属预期。
-	if events[0].OldState != task.StatePending {
-		t.Errorf("expected first event old_state pending, got %s", events[0].OldState)
-	}
-	for i, ev := range events {
-		if ev.OldState != task.StatePending && ev.OldState != task.StateInProgress {
-			t.Errorf("event %d has unexpected old_state %s", i, ev.OldState)
-		}
-		if ev.NewState != task.StateInProgress && ev.NewState != task.StateCompleted &&
-			ev.NewState != task.StateFailed && ev.NewState != task.StateCancelled {
-			t.Errorf("event %d has unexpected new_state %s", i, ev.NewState)
-		}
-	}
-}
-
-// waitForEvent 轮询等待观察者收集到满足条件的事件，超时则直接失败。
-// 用于消除"异步 goroutine 尚未执行完就断言"导致的偶发失败。
-func waitForEvent(t *testing.T, obs *testObserver, cond func([]TaskEvent) bool) {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if cond(obs.snapshot()) {
-			return
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
-	t.Fatalf("timeout waiting for observer event, got %+v", obs.snapshot())
 }
 
 // --- 依赖测试 ---
