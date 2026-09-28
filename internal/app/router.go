@@ -60,6 +60,9 @@ func NewRouter(a *App) http.Handler {
 	// Agent health monitoring & alerts
 	a.MonitorH.RegisterRoutes(mux)
 
+	// Audit log & operation replay
+	a.AuditH.RegisterRoutes(mux)
+
 	// Apply global middleware chain: Recovery → RequestID → CORS → Logging
 	var handler http.Handler = mux
 	handler = loggingMiddleware(a.Logger)(handler)

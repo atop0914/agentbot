@@ -8,6 +8,7 @@ import (
 
 	"github.com/atop0914/agentbot/internal/adapter"
 	"github.com/atop0914/agentbot/internal/agent"
+	"github.com/atop0914/agentbot/internal/audit"
 	"github.com/atop0914/agentbot/internal/auth"
 	"github.com/atop0914/agentbot/internal/browser"
 	"github.com/atop0914/agentbot/internal/cloud"
@@ -52,6 +53,9 @@ type App struct {
 	MarketplaceH *template.MarketplaceHandler
 	MonitorSvc   monitor.Service
 	MonitorH     *monitor.Handler
+	AuditSvc     audit.Service
+	AuditH       *audit.Handler
+	AuditRec     audit.Recorder
 }
 
 // New creates a new App with all in-memory services wired up.
@@ -157,6 +161,12 @@ func New() *App {
 	monitorSvc := monitor.NewService(monitorRepo)
 	monitorH := monitor.NewHandler(monitorSvc)
 
+	// Audit log (需要早于其他业务模块创建，便于后续注入打点)
+	auditRepo := audit.NewMemoryRepository()
+	auditSvc := audit.NewService(auditRepo)
+	auditH := audit.NewHandler(auditSvc)
+	auditRec := audit.NewRecorder(auditSvc)
+
 	// WebSocket
 	wsHub := websocket.NewHub(logger)
 	go wsHub.Run()
@@ -203,5 +213,8 @@ func New() *App {
 		MarketplaceH: marketplaceH,
 		MonitorSvc:   monitorSvc,
 		MonitorH:     monitorH,
+		AuditSvc:     auditSvc,
+		AuditH:       auditH,
+		AuditRec:     auditRec,
 	}
 }
