@@ -1034,6 +1034,154 @@ func TestMemoryCleanup(t *testing.T) {
 
 // --- Benchmark Tests ---
 
+// --- 审计日志（Day 21 新增模块的端到端联通验证） ---
+
+func TestAuditCreateAndQuery(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	// 写入两条事件
+	for i, actor := range []string{"u1", "u2"} {
+		body := map[string]interface{}{
+			"action":     "user.login",
+			"actor":      actor,
+			"actor_type": "user",
+			"resource":   "user",
+			"details":    map[string]interface{}{"seq": i},
+		}
+		raw, _ := json.Marshal(body)
+		resp, err := http.Post(ts.URL+"/api/v1/audit/events", "application/json", bytes.NewReader(raw))
+		if err != nil {
+			t.Fatalf("POST /api/v1/audit/events: %v", err)
+		}
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("status = %d, want 201", resp.StatusCode)
+		}
+		resp.Body.Close()
+	}
+
+	resp, err := http.Get(ts.URL + "/api/v1/audit/events?actor=u1")
+	if err != nil {
+		t.Fatalf("GET /api/v1/audit/events: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var list struct {
+		Total  int `json:"total"`
+		Events []struct {
+			ID     string `json:"id"`
+			Action string `json:"action"`
+			Actor  string `json:"actor"`
+		} `json:"events"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if list.Total != 1 || len(list.Events) != 1 {
+		t.Fatalf("total=%d len=%d, want 1/1", list.Total, len(list.Events))
+	}
+	if list.Events[0].Actor != "u1" {
+		t.Errorf("actor = %q, want u1", list.Events[0].Actor)
+	}
+}
+
+func TestAuditStatsAndDistinct(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	for _, action := range []string{"agent.created", "agent.created", "task.completed"} {
+		raw, _ := json.Marshal(map[string]interface{}{"action": action, "actor": "sys"})
+		resp, err := http.Post(ts.URL+"/api/v1/audit/events", "application/json", bytes.NewReader(raw))
+		if err != nil {
+			t.Fatalf("POST: %v", err)
+		}
+		resp.Body.Close()
+	}
+
+	resp, err := http.Get(ts.URL + "/api/v1/audit/stats?dimension=action")
+	if err != nil {
+		t.Fatalf("GET stats: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var stats struct {
+		Total   int            `json:"total"`
+		Buckets map[string]int `json:"buckets"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if stats.Total != 3 {
+		t.Errorf("total = %d, want 3", stats.Total)
+	}
+	if stats.Buckets["agent.created"] != 2 {
+		t.Errorf("agent.created = %d, want 2", stats.Buckets["agent.created"])
+	}
+
+	resp2, err := http.Get(ts.URL + "/api/v1/audit/distinct?field=action")
+	if err != nil {
+		t.Fatalf("GET distinct: %v", err)
+	}
+	defer resp2.Body.Close()
+
+	var distinct struct {
+		Values []string `json:"values"`
+	}
+	if err := json.NewDecoder(resp2.Body).Decode(&distinct); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(distinct.Values) != 2 {
+		t.Fatalf("values = %v, want 2", distinct.Values)
+	}
+}
+
+func TestAuditExportCSV(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	raw, _ := json.Marshal(map[string]interface{}{"action": "user.login", "actor": "u1"})
+	resp, err := http.Post(ts.URL+"/api/v1/audit/events", "application/json", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	resp.Body.Close()
+
+	csvResp, err := http.Get(ts.URL + "/api/v1/audit/export?format=csv")
+	if err != nil {
+		t.Fatalf("GET export: %v", err)
+	}
+	defer csvResp.Body.Close()
+
+	if ct := csvResp.Header.Get("Content-Type"); ct == "" {
+		t.Error("missing content-type on export")
+	}
+	buf := &bytes.Buffer{}
+	if _, err := buf.ReadFrom(csvResp.Body); err != nil {
+		t.Fatalf("read export: %v", err)
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("id,timestamp,actor")) {
+		t.Errorf("csv body = %s, want header row", buf.String())
+	}
+}
+
+func BenchmarkAuditAppend(b *testing.B) {
+	a := New()
+	handler := NewRouter(a)
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	body := []byte(`{"action":"bench.event","actor":"bench","resource":"system"}`)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		resp, err := http.Post(ts.URL+"/api/v1/audit/events", "application/json", bytes.NewReader(body))
+		if err != nil {
+			b.Fatal(err)
+		}
+		resp.Body.Close()
+	}
+}
+
 func BenchmarkHealthEndpoint(b *testing.B) {
 	a := New()
 	handler := NewRouter(a)
