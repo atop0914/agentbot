@@ -30,6 +30,7 @@ agentbot/
 │   ├── template/               # 工作流模板 + 模板市场
 │   ├── monitor/                # 健康监控 + 告警
 │   ├── audit/                  # 审计日志 + 操作回放
+│   ├── admin/                  # 管理后台聚合视图 + 静态资源托管
 │   └── websocket/              # 实时通信
 ├── pkg/config/                 # 配置加载
 └── internal/pkg/errors/        # 错误类型
@@ -54,6 +55,7 @@ agentbot/
 - [x] 工作流模板 + 模板市场
 - [x] Agent 健康监控 + 告警规则
 - [x] 审计日志（查询、聚合、导出、清理）
+- [x] 管理后台服务端（聚合视图 + 配置 + 静态资源托管）
 - [x] 实时通信（WebSocket）
 
 ### 规划中
@@ -61,7 +63,7 @@ agentbot/
 - [ ] PostgreSQL 持久化（当前为内存实现）
 - [ ] Redis 缓存与分布式锁
 - [ ] Agent 运行时（容器隔离，依赖 Docker）
-- [ ] 管理后台前端
+- [ ] 管理后台前端（React 构建产物挂载到 `/admin/*`）
 - [ ] 部署配置（Docker / K8s）
 
 ## 快速开始
@@ -97,6 +99,8 @@ POST   /api/v1/auth/login             登录
        /api/v1/marketplace             模板市场
        /api/v1/monitor                 健康监控与告警
        /api/v1/audit                   审计日志查询/聚合/导出
+       /api/v1/admin                   管理后台配置 + 聚合视图
+       /admin/*                        管理后台前端静态资源
        /api/v1/ws                      WebSocket 实时通道
 ```
 

@@ -269,6 +269,94 @@ err := audited(ctx, func(ctx context.Context) error { return doLogin(ctx) })
 
 ---
 
+## 管理后台
+
+管理后台的服务端部分：把各业务模块的统计聚合成控制台首屏需要的单一视图，
+并托管将来的 React 构建产物。本仓库不含前端工具链，前端产物放在
+`web/admin/dist`，缺失时控制台入口返回占位页而非 404。
+
+### 接口
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/admin/config` | 读取控制台配置（标题、版本、功能开关） |
+| PUT | `/api/v1/admin/config` | 更新配置（部分更新，未提供的字段保持原值） |
+| GET | `/api/v1/admin/snapshot` | 聚合视图（控制台首屏） |
+| GET | `/api/v1/admin/static` | 静态资源挂载状态 |
+| GET | `/admin/*` | 前端静态资源（产物缺失时返回占位页） |
+
+### 配置
+
+`feature_flags` 为**整体替换**语义：请求中带上该字段即覆盖全部开关，
+传空对象表示清空。默认只开启只读展示类开关，`agent_control`、
+`task_control`、`user_admin` 默认关闭，避免开发期误操作真实 Agent。
+
+```bash
+curl -X PUT localhost:8080/api/v1/admin/config \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"AgentBot 运维台","feature_flags":{"show_audit":true,"show_monitor":true}}'
+```
+
+标题会被 trim，为空或超过 120 字符返回 400；开关名不得含空白字符。
+
+### 聚合视图
+
+### 查询参数
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `sections` | 全部 | 逗号分隔的分区名，见下表；未知分区返回 400 |
+| `recent_limit` | 10 | “最近”类列表长度（上限 200），超限自动收敛 |
+| `audit_window` | 不限 | 审计事件统计时间窗，Go duration 语法（如 `24h`） |
+
+| 分区 | 内容 |
+|------|------|
+| `overview` | 概览计数（Agent / 任务 / 未处理告警 / 审计事件） |
+| `agents` | Agent 状态分布 + 最近更新的若干个 |
+| `tasks` | 任务状态分布 |
+| `alerts` | 未处理告警（按严重级别聚合 + 最近若干条） |
+| `audit` | 最近审计事件 + 按动作聚合 |
+| `plugins` | 功能开关当前取值 |
+| `static` | 静态资源挂载状态 |
+
+**分区独立降级**：某个下游模块出错时，只有该分区缺失并记入
+`errors`，同时 `overview.degraded` 置为 `true`，其余分区照常渲染。
+因此控制台在部分模块未装配时依然可用。
+
+```bash
+# 只要概览和 Agent 分布，最近列表取 5 条
+curl 'localhost:8080/api/v1/admin/snapshot?sections=overview,agents&recent_limit=5'
+```
+
+响应示例：
+
+```json
+{
+  "title": "AgentBot Admin",
+  "version": "v1.0.0",
+  "generated_at": "2026-09-29T12:00:00Z",
+  "overview": {
+    "total_agents": 2,
+    "running_agents": 1,
+    "failed_agents": 0,
+    "total_tasks": 1,
+    "open_alerts": 0,
+    "audit_events": 3,
+    "degraded": false
+  },
+  "agents": {
+    "total": 2,
+    "by_state": {"idle": 1, "running": 1},
+    "recently": [{"id": "a_...", "name": "agent-1", "state": "running", "updated_at": "..."}]
+  }
+}
+```
+
+`by_state` / `by_severity` / `by_action` 在无数据时返回空对象而非 `null`，
+保证前端无需做额外判空。
+
+---
+
 ## WebSocket
 
 `GET /api/v1/ws?token=<access_token>` —— 省略 `token` 时以匿名连接建立，
