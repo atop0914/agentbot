@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/atop0914/agentbot/internal/adapter"
+	"github.com/atop0914/agentbot/internal/admin"
 	"github.com/atop0914/agentbot/internal/agent"
 	"github.com/atop0914/agentbot/internal/audit"
 	"github.com/atop0914/agentbot/internal/auth"
@@ -23,6 +24,10 @@ import (
 	"github.com/atop0914/agentbot/internal/user"
 	"github.com/atop0914/agentbot/internal/websocket"
 )
+
+// adminConsoleDir 是前端构建产物的默认落点。
+// 目录不存在时管理后台返回占位页，不影响服务启动。
+const adminConsoleDir = "web/admin/dist"
 
 // App holds all application dependencies
 type App struct {
@@ -56,6 +61,8 @@ type App struct {
 	AuditSvc     audit.Service
 	AuditH       *audit.Handler
 	AuditRec     audit.Recorder
+	AdminSvc     admin.Service
+	AdminH       *admin.Handler
 }
 
 // New creates a new App with all in-memory services wired up.
@@ -169,7 +176,6 @@ func New() *App {
 
 	// WebSocket
 	wsHub := websocket.NewHub(logger)
-	go wsHub.Run()
 	wsHandler := websocket.NewHandler(wsHub, logger)
 
 	// Wire auth for WebSocket (optional auth via query token)
@@ -184,6 +190,16 @@ func New() *App {
 		}
 		return claims.UserID, nil
 	}
+
+	// Admin console (aggregate read-only view over the other modules)
+	adminSources := admin.Sources{
+		Agents:  adminAgentSource{svc: agentSvc},
+		Tasks:   adminTaskSource{mgr: taskSvc},
+		Monitor: adminMonitorSource{svc: monitorSvc},
+		Audit:   adminAuditSource{svc: auditSvc},
+	}
+	adminSvc := admin.NewService(adminSources, "v1.0.0")
+	adminH := admin.NewHandler(adminSvc, adminConsoleDir)
 
 	return &App{
 		Logger:       logger,
@@ -216,5 +232,7 @@ func New() *App {
 		AuditSvc:     auditSvc,
 		AuditH:       auditH,
 		AuditRec:     auditRec,
+		AdminSvc:     adminSvc,
+		AdminH:       adminH,
 	}
 }

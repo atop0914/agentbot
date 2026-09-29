@@ -63,6 +63,9 @@ func NewRouter(a *App) http.Handler {
 	// Audit log & operation replay
 	a.AuditH.RegisterRoutes(mux)
 
+	// Admin console (aggregate view + static hosting for the React build)
+	a.AdminH.RegisterRoutes(mux)
+
 	// Apply global middleware chain: Recovery → RequestID → CORS → Logging
 	var handler http.Handler = mux
 	handler = loggingMiddleware(a.Logger)(handler)
