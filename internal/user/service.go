@@ -141,6 +141,11 @@ func (s *UserService) ValidatePassword(email, password string) (*User, error) {
 		return nil, fmt.Errorf("invalid email or password")
 	}
 
+	// 状态检查在密码校验之前：停用/封禁账号即使密码正确也不得登录。
+	if !user.Status.IsUsable() {
+		return nil, fmt.Errorf("account is %s", user.Status)
+	}
+
 	if user.PasswordHash == "" {
 		return nil, fmt.Errorf("password login not available for this account")
 	}
@@ -175,6 +180,35 @@ func (s *UserService) UpdatePassword(id, oldPassword, newPassword string) error 
 
 	user.PasswordHash = string(hash)
 	return s.repo.Update(user)
+}
+
+// SetStatus 启用 / 停用 / 封禁用户。
+//
+// 这是管理后台的写操作，因此：
+//  1. 状态必须显式合法，不接受空字符串（避免"清空即启用"这类隐式升级）；
+//  2. 停用/封禁必须立刻影响登录 —— ValidatePassword 会在校验密码前先看状态。
+func (s *UserService) SetStatus(id string, status Status) (*User, error) {
+	if !status.Valid() {
+		return nil, fmt.Errorf("invalid status: %s", status)
+	}
+
+	user, err := s.repo.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if user == nil {
+		return nil, fmt.Errorf("user not found")
+	}
+	if user.Status == status {
+		// 幂等：重复设置同一状态直接返回，避免产生无意义的 updated_at 变更。
+		return user, nil
+	}
+
+	user.Status = status
+	if err := s.repo.Update(user); err != nil {
+		return nil, err
+	}
+	return user, nil
 }
 
 // LinkOAuth 关联 OAuth 账号

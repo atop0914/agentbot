@@ -38,6 +38,20 @@ const (
 	StatusBanned   Status = "banned"
 )
 
+// Valid 判断状态是否受支持。
+func (s Status) Valid() bool {
+	switch s {
+	case StatusActive, StatusInactive, StatusBanned:
+		return true
+	}
+	return false
+}
+
+// IsUsable 判断该状态下用户是否还能登录。
+//
+// 只有 active 可以登录：inactive 是管理员主动停用，banned 是违规封禁。
+func (s Status) IsUsable() bool { return s == StatusActive }
+
 // CreateUserRequest 创建用户请求
 type CreateUserRequest struct {
 	Email    string `json:"email" validate:"required,email"`
@@ -101,4 +115,6 @@ type Service interface {
 	ValidatePassword(email, password string) (*User, error)
 	UpdatePassword(id, oldPassword, newPassword string) error
 	LinkOAuth(userID, provider, oauthID string) error
+	// SetStatus 启用 / 停用 / 封禁用户（管理后台用）。
+	SetStatus(id string, status Status) (*User, error)
 }
