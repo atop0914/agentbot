@@ -123,18 +123,23 @@ func DefaultRouteTable() *RouteTable {
 		{Method: http.MethodGet, Pattern: "/api/v1/agents/", Action: role.PermAgentRead, TargetType: "agent"},
 		{Method: http.MethodPut, Pattern: "/api/v1/agents/", Action: role.PermAgentUpdate, TargetType: "agent"},
 		{Method: http.MethodDelete, Pattern: "/api/v1/agents/", Action: role.PermAgentDelete, TargetType: "agent"},
+		// Agent 生命周期动作（start/stop/pause/resume）走 POST 子路径。
+		{Method: http.MethodPost, Pattern: "/api/v1/agents/", Action: role.PermAgentControl, TargetType: "agent"},
 
 		// Cloud environment
 		{Method: http.MethodGet, Pattern: "/api/v1/cloud/", Action: role.PermEnvRead},
 		{Method: http.MethodPost, Pattern: "/api/v1/cloud/", Action: role.PermEnvExecute},
+		{Method: http.MethodGet, Pattern: "/api/v1/environments", Action: role.PermEnvRead},
+		{Method: http.MethodPost, Pattern: "/api/v1/environments", Action: role.PermEnvCreate},
+		{Method: http.MethodGet, Pattern: "/api/v1/environments/", Action: role.PermEnvRead},
+		{Method: http.MethodPost, Pattern: "/api/v1/environments/", Action: role.PermEnvExecute},
+		{Method: http.MethodDelete, Pattern: "/api/v1/environments/", Action: role.PermEnvDestroy},
 
 		// Task
 		{Method: http.MethodGet, Pattern: "/api/v1/tasks", Action: role.PermTaskRead},
 		{Method: http.MethodPost, Pattern: "/api/v1/tasks", Action: role.PermTaskCreate},
+		{Method: http.MethodGet, Pattern: "/api/v1/tasks/", Action: role.PermTaskRead},
 		{Method: http.MethodDelete, Pattern: "/api/v1/tasks/", Action: role.PermTaskCancel},
-
-		// Cloud environment 的环境子资源（创建/销毁/执行）
-		{Method: http.MethodDelete, Pattern: "/api/v1/environments/", Action: role.PermEnvDestroy},
 
 		// Terminal / filesystem（Agent 能力面里最危险的两块）
 		//
@@ -151,7 +156,9 @@ func DefaultRouteTable() *RouteTable {
 
 		// Browser / memory
 		{Method: http.MethodGet, Pattern: "/api/v1/browser", Action: role.PermBrowserUse},
+		{Method: http.MethodGet, Pattern: "/api/v1/browser/", Action: role.PermBrowserUse},
 		{Method: http.MethodPost, Pattern: "/api/v1/browser/", Action: role.PermBrowserUse},
+		{Method: http.MethodDelete, Pattern: "/api/v1/browser/", Action: role.PermBrowserUse},
 		{Method: http.MethodGet, Pattern: "/api/v1/browsers", Action: role.PermBrowserUse},
 		{Method: http.MethodPost, Pattern: "/api/v1/browsers", Action: role.PermBrowserUse},
 		{Method: http.MethodGet, Pattern: "/api/v1/browsers/", Action: role.PermBrowserUse},
@@ -173,6 +180,7 @@ func DefaultRouteTable() *RouteTable {
 		{Method: http.MethodPost, Pattern: "/api/v1/decompose", Action: role.PermTaskCreate},
 
 		// 多 Agent 通信
+		{Method: http.MethodGet, Pattern: "/api/v1/messages", Action: role.PermMessageRead},
 		{Method: http.MethodPost, Pattern: "/api/v1/messages", Action: role.PermMessageSend},
 		{Method: http.MethodPost, Pattern: "/api/v1/messages/", Action: role.PermMessageSend},
 		{Method: http.MethodGet, Pattern: "/api/v1/messages/", Action: role.PermMessageRead},
@@ -199,8 +207,11 @@ func DefaultRouteTable() *RouteTable {
 		// Agent 健康监控：观测面只读。
 		{Method: http.MethodGet, Pattern: "/api/v1/monitor/", Action: role.PermAgentRead},
 
-		// 审计日志：读审计需要 role:manage（属敏感数据），purge 需要额外权限。
+		// 审计日志：读审计需要 role:manage（属敏感数据）。
+		// 写入（/audit/events）由业务模块经内部 recorder 产生，HTTP 直写同样
+		// 要求 role:manage，避免任何人伪造审计记录。
 		{Method: http.MethodGet, Pattern: "/api/v1/audit/", Action: role.PermRoleManage},
+		{Method: http.MethodPost, Pattern: "/api/v1/audit/events", Action: role.PermRoleManage},
 		{Method: http.MethodPost, Pattern: "/api/v1/audit/purge", Action: role.PermRoleManage},
 
 		// 角色与权限矩阵（元权限）
@@ -237,7 +248,9 @@ func DefaultRouteTable() *RouteTable {
 		// 认证相关路由自身不需要权限（登录/注册/刷新/登出）。
 		{Pattern: "/api/v1/auth/", Public: true},
 
-		// WebSocket 升级：以 query token 认证，权限在连接建立时校验。
+		// WebSocket：升级走 query token（权限在连接建立时校验），状态查询为只读。
+		// 注意 /ws/status 若不加规则会落进默认拒绝，前端探活会 403。
+		{Pattern: "/api/v1/ws/status", Public: true},
 		{Pattern: "/api/v1/ws", Public: true},
 
 		// 管理后台聚合视图与静态资源（控制台自身的读取能力）。
