@@ -36,9 +36,9 @@ type Config struct {
 
 // Action represents a single operation that an adapter can perform.
 type Action struct {
-	Name        string            `json:"name"`
-	Description string            `json:"description,omitempty"`
-	Parameters  []ActionParam     `json:"parameters,omitempty"`
+	Name        string        `json:"name"`
+	Description string        `json:"description,omitempty"`
+	Parameters  []ActionParam `json:"parameters,omitempty"`
 }
 
 // ActionParam defines a parameter for an adapter action.

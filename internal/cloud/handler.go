@@ -117,7 +117,7 @@ func (h *Handler) handleAction(w http.ResponseWriter, r *http.Request, envID, ac
 // Create 创建环境
 func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		AgentID string          `json:"agent_id"`
+		AgentID string           `json:"agent_id"`
 		Config  CreateEnvRequest `json:"config"`
 	}
 

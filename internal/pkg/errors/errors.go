@@ -16,13 +16,13 @@ var (
 	ErrInternal     = errors.New("internal server error")
 
 	// 认证相关错误
-	ErrInvalidToken    = errors.New("invalid or expired token")
-	ErrTokenExpired    = errors.New("token has expired")
-	ErrInvalidPassword = errors.New("invalid password")
-	ErrUserNotFound    = errors.New("user not found")
-	ErrEmailExists     = errors.New("email already exists")
-	ErrUsernameExists  = errors.New("username already exists")
-	ErrOAuthFailed     = errors.New("oauth authentication failed")
+	ErrInvalidToken      = errors.New("invalid or expired token")
+	ErrTokenExpired      = errors.New("token has expired")
+	ErrInvalidPassword   = errors.New("invalid password")
+	ErrUserNotFound      = errors.New("user not found")
+	ErrEmailExists       = errors.New("email already exists")
+	ErrUsernameExists    = errors.New("username already exists")
+	ErrOAuthFailed       = errors.New("oauth authentication failed")
 	ErrOAuthStateInvalid = errors.New("invalid oauth state")
 )
 

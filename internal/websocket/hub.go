@@ -13,8 +13,8 @@ type Hub struct {
 	clients map[*Client]struct{}
 
 	// Indexed lookups for fast routing
-	clientsByUser  map[string]map[*Client]struct{} // userID -> clients
-	clientsByID    map[string]*Client              // clientID -> client
+	clientsByUser map[string]map[*Client]struct{} // userID -> clients
+	clientsByID   map[string]*Client              // clientID -> client
 
 	// Channels for hub operations
 	register   chan *Client
@@ -44,14 +44,14 @@ type Envelope struct {
 // NewHub creates a new Hub.
 func NewHub(logger *slog.Logger) *Hub {
 	return &Hub{
-		clients:        make(map[*Client]struct{}),
-		clientsByUser:  make(map[string]map[*Client]struct{}),
-		clientsByID:    make(map[string]*Client),
-		register:       make(chan *Client, 64),
-		unregister:     make(chan *Client, 64),
-		broadcast:      make(chan *Envelope, 256),
-		logger:         logger,
-		stopCh:         make(chan struct{}),
+		clients:       make(map[*Client]struct{}),
+		clientsByUser: make(map[string]map[*Client]struct{}),
+		clientsByID:   make(map[string]*Client),
+		register:      make(chan *Client, 64),
+		unregister:    make(chan *Client, 64),
+		broadcast:     make(chan *Envelope, 256),
+		logger:        logger,
+		stopCh:        make(chan struct{}),
 	}
 }
 

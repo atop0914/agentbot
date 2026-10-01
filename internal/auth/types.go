@@ -21,15 +21,15 @@ type TokenPair struct {
 
 // TokenConfig Token 配置
 type TokenConfig struct {
-	Secret          string        `json:"secret"`
-	AccessExpiry    time.Duration `json:"access_expiry"`    // Access Token 过期时间
-	RefreshExpiry   time.Duration `json:"refresh_expiry"`   // Refresh Token 过期时间
-	Issuer          string        `json:"issuer"`           // 签发者
+	Secret        string        `json:"secret"`
+	AccessExpiry  time.Duration `json:"access_expiry"`  // Access Token 过期时间
+	RefreshExpiry time.Duration `json:"refresh_expiry"` // Refresh Token 过期时间
+	Issuer        string        `json:"issuer"`         // 签发者
 }
 
 // OAuthConfig OAuth 配置
 type OAuthConfig struct {
-	Provider     string   `json:"provider"`      // github, google
+	Provider     string   `json:"provider"` // github, google
 	ClientID     string   `json:"client_id"`
 	ClientSecret string   `json:"client_secret"`
 	RedirectURL  string   `json:"redirect_url"`

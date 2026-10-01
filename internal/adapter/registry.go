@@ -9,9 +9,9 @@ import (
 
 // MemoryRegistry is an in-memory implementation of the Registry interface.
 type MemoryRegistry struct {
-	mu       sync.RWMutex
-	adapters map[string]Adapter
-	configs  map[string]*Config
+	mu        sync.RWMutex
+	adapters  map[string]Adapter
+	configs   map[string]*Config
 	factories map[AdapterType]Factory
 }
 

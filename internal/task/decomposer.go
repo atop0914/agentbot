@@ -127,9 +127,9 @@ func (d *RuleBasedDecomposer) decomposeDeploy(goal string, ctx *decomposeContext
 			State:       StatePending,
 			Actions: []Action{
 				{
-					ID:    ctx.nextActionID(st1ID),
-					Type:  ActionTerminal,
-					Name:  "检查运行环境",
+					ID:   ctx.nextActionID(st1ID),
+					Type: ActionTerminal,
+					Name: "检查运行环境",
 					Params: map[string]string{
 						"command": "echo 'Checking environment readiness...'",
 					},
@@ -146,9 +146,9 @@ func (d *RuleBasedDecomposer) decomposeDeploy(goal string, ctx *decomposeContext
 			DependsOn:   []string{st1ID},
 			Actions: []Action{
 				{
-					ID:    ctx.nextActionID(st2ID),
-					Type:  ActionTerminal,
-					Name:  "执行构建",
+					ID:   ctx.nextActionID(st2ID),
+					Type: ActionTerminal,
+					Name: "执行构建",
 					Params: map[string]string{
 						"command": "echo 'Building project...'",
 					},
@@ -165,9 +165,9 @@ func (d *RuleBasedDecomposer) decomposeDeploy(goal string, ctx *decomposeContext
 			DependsOn:   []string{st2ID},
 			Actions: []Action{
 				{
-					ID:    ctx.nextActionID(st3ID),
-					Type:  ActionTerminal,
-					Name:  "执行测试",
+					ID:   ctx.nextActionID(st3ID),
+					Type: ActionTerminal,
+					Name: "执行测试",
 					Params: map[string]string{
 						"command": "echo 'Running tests...'",
 					},
@@ -184,9 +184,9 @@ func (d *RuleBasedDecomposer) decomposeDeploy(goal string, ctx *decomposeContext
 			DependsOn:   []string{st3ID},
 			Actions: []Action{
 				{
-					ID:    ctx.nextActionID(st4ID),
-					Type:  ActionTerminal,
-					Name:  "部署上线",
+					ID:   ctx.nextActionID(st4ID),
+					Type: ActionTerminal,
+					Name: "部署上线",
 					Params: map[string]string{
 						"command": "echo 'Deploying...'",
 					},
@@ -214,9 +214,9 @@ func (d *RuleBasedDecomposer) decomposeTest(goal string, ctx *decomposeContext) 
 			State:       StatePending,
 			Actions: []Action{
 				{
-					ID:    ctx.nextActionID(st1ID),
-					Type:  ActionTerminal,
-					Name:  "初始化测试环境",
+					ID:   ctx.nextActionID(st1ID),
+					Type: ActionTerminal,
+					Name: "初始化测试环境",
 					Params: map[string]string{
 						"command": "echo 'Preparing test environment...'",
 					},
@@ -233,9 +233,9 @@ func (d *RuleBasedDecomposer) decomposeTest(goal string, ctx *decomposeContext) 
 			DependsOn:   []string{st1ID},
 			Actions: []Action{
 				{
-					ID:    ctx.nextActionID(st2ID),
-					Type:  ActionTerminal,
-					Name:  "运行测试",
+					ID:   ctx.nextActionID(st2ID),
+					Type: ActionTerminal,
+					Name: "运行测试",
 					Params: map[string]string{
 						"command": "echo 'Running tests...'",
 					},
@@ -252,9 +252,9 @@ func (d *RuleBasedDecomposer) decomposeTest(goal string, ctx *decomposeContext) 
 			DependsOn:   []string{st2ID},
 			Actions: []Action{
 				{
-					ID:    ctx.nextActionID(st3ID),
-					Type:  ActionTerminal,
-					Name:  "生成报告",
+					ID:   ctx.nextActionID(st3ID),
+					Type: ActionTerminal,
+					Name: "生成报告",
 					Params: map[string]string{
 						"command": "echo 'Generating test report...'",
 					},
@@ -281,9 +281,9 @@ func (d *RuleBasedDecomposer) decomposeFileOp(goal string, ctx *decomposeContext
 			State:       StatePending,
 			Actions: []Action{
 				{
-					ID:    ctx.nextActionID(st1ID),
-					Type:  ActionFile,
-					Name:  "搜索文件",
+					ID:   ctx.nextActionID(st1ID),
+					Type: ActionFile,
+					Name: "搜索文件",
 					Params: map[string]string{
 						"operation": "list",
 						"path":      ".",
@@ -301,9 +301,9 @@ func (d *RuleBasedDecomposer) decomposeFileOp(goal string, ctx *decomposeContext
 			DependsOn:   []string{st1ID},
 			Actions: []Action{
 				{
-					ID:    ctx.nextActionID(st2ID),
-					Type:  ActionFile,
-					Name:  "处理文件",
+					ID:   ctx.nextActionID(st2ID),
+					Type: ActionFile,
+					Name: "处理文件",
 					Params: map[string]string{
 						"operation": "process",
 					},
@@ -331,9 +331,9 @@ func (d *RuleBasedDecomposer) decomposeBrowser(goal string, ctx *decomposeContex
 			State:       StatePending,
 			Actions: []Action{
 				{
-					ID:    ctx.nextActionID(st1ID),
-					Type:  ActionBrowser,
-					Name:  "初始化浏览器",
+					ID:   ctx.nextActionID(st1ID),
+					Type: ActionBrowser,
+					Name: "初始化浏览器",
 					Params: map[string]string{
 						"action": "launch",
 					},
@@ -350,9 +350,9 @@ func (d *RuleBasedDecomposer) decomposeBrowser(goal string, ctx *decomposeContex
 			DependsOn:   []string{st1ID},
 			Actions: []Action{
 				{
-					ID:    ctx.nextActionID(st2ID),
-					Type:  ActionBrowser,
-					Name:  "页面操作",
+					ID:   ctx.nextActionID(st2ID),
+					Type: ActionBrowser,
+					Name: "页面操作",
 					Params: map[string]string{
 						"action": "navigate",
 					},
@@ -369,9 +369,9 @@ func (d *RuleBasedDecomposer) decomposeBrowser(goal string, ctx *decomposeContex
 			DependsOn:   []string{st2ID},
 			Actions: []Action{
 				{
-					ID:    ctx.nextActionID(st3ID),
-					Type:  ActionBrowser,
-					Name:  "数据提取",
+					ID:   ctx.nextActionID(st3ID),
+					Type: ActionBrowser,
+					Name: "数据提取",
 					Params: map[string]string{
 						"action": "extract",
 					},
@@ -398,9 +398,9 @@ func (d *RuleBasedDecomposer) decomposeAPI(goal string, ctx *decomposeContext) [
 			State:       StatePending,
 			Actions: []Action{
 				{
-					ID:    ctx.nextActionID(st1ID),
-					Type:  ActionAPI,
-					Name:  "构建请求",
+					ID:   ctx.nextActionID(st1ID),
+					Type: ActionAPI,
+					Name: "构建请求",
 					Params: map[string]string{
 						"action": "prepare",
 					},
@@ -417,9 +417,9 @@ func (d *RuleBasedDecomposer) decomposeAPI(goal string, ctx *decomposeContext) [
 			DependsOn:   []string{st1ID},
 			Actions: []Action{
 				{
-					ID:    ctx.nextActionID(st2ID),
-					Type:  ActionAPI,
-					Name:  "发送请求",
+					ID:   ctx.nextActionID(st2ID),
+					Type: ActionAPI,
+					Name: "发送请求",
 					Params: map[string]string{
 						"action": "execute",
 					},
@@ -447,9 +447,9 @@ func (d *RuleBasedDecomposer) decomposeDatabase(goal string, ctx *decomposeConte
 			State:       StatePending,
 			Actions: []Action{
 				{
-					ID:    ctx.nextActionID(st1ID),
-					Type:  ActionTerminal,
-					Name:  "数据库连接",
+					ID:   ctx.nextActionID(st1ID),
+					Type: ActionTerminal,
+					Name: "数据库连接",
 					Params: map[string]string{
 						"command": "echo 'Connecting to database...'",
 					},
@@ -466,9 +466,9 @@ func (d *RuleBasedDecomposer) decomposeDatabase(goal string, ctx *decomposeConte
 			DependsOn:   []string{st1ID},
 			Actions: []Action{
 				{
-					ID:    ctx.nextActionID(st2ID),
-					Type:  ActionTerminal,
-					Name:  "执行 SQL",
+					ID:   ctx.nextActionID(st2ID),
+					Type: ActionTerminal,
+					Name: "执行 SQL",
 					Params: map[string]string{
 						"command": "echo 'Executing query...'",
 					},
@@ -485,9 +485,9 @@ func (d *RuleBasedDecomposer) decomposeDatabase(goal string, ctx *decomposeConte
 			DependsOn:   []string{st2ID},
 			Actions: []Action{
 				{
-					ID:    ctx.nextActionID(st3ID),
-					Type:  ActionTerminal,
-					Name:  "处理结果",
+					ID:   ctx.nextActionID(st3ID),
+					Type: ActionTerminal,
+					Name: "处理结果",
 					Params: map[string]string{
 						"command": "echo 'Processing results...'",
 					},
@@ -515,9 +515,9 @@ func (d *RuleBasedDecomposer) decomposeDefault(goal string, ctx *decomposeContex
 			State:       StatePending,
 			Actions: []Action{
 				{
-					ID:    ctx.nextActionID(st1ID),
-					Type:  ActionTerminal,
-					Name:  "目标分析",
+					ID:   ctx.nextActionID(st1ID),
+					Type: ActionTerminal,
+					Name: "目标分析",
 					Params: map[string]string{
 						"command": fmt.Sprintf("echo 'Analyzing goal: %s'", goal),
 					},
@@ -534,9 +534,9 @@ func (d *RuleBasedDecomposer) decomposeDefault(goal string, ctx *decomposeContex
 			DependsOn:   []string{st1ID},
 			Actions: []Action{
 				{
-					ID:    ctx.nextActionID(st2ID),
-					Type:  ActionTerminal,
-					Name:  "执行核心逻辑",
+					ID:   ctx.nextActionID(st2ID),
+					Type: ActionTerminal,
+					Name: "执行核心逻辑",
 					Params: map[string]string{
 						"command": "echo 'Executing task...'",
 					},
@@ -553,9 +553,9 @@ func (d *RuleBasedDecomposer) decomposeDefault(goal string, ctx *decomposeContex
 			DependsOn:   []string{st2ID},
 			Actions: []Action{
 				{
-					ID:    ctx.nextActionID(st3ID),
-					Type:  ActionTerminal,
-					Name:  "结果验证",
+					ID:   ctx.nextActionID(st3ID),
+					Type: ActionTerminal,
+					Name: "结果验证",
 					Params: map[string]string{
 						"command": "echo 'Verifying results...'",
 					},

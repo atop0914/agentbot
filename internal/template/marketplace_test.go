@@ -40,9 +40,9 @@ func TestMarketplace_Publish(t *testing.T) {
 	tmpl := createTestTemplate(t, repo, "deploy-app")
 
 	entry := MarketplaceEntry{
-		Version:  "1.0.0",
-		Summary:  "Deploy application to cloud",
-		License:  "MIT",
+		Version: "1.0.0",
+		Summary: "Deploy application to cloud",
+		License: "MIT",
 	}
 
 	published, err := svc.Publish(ctx, tmpl.ID, entry)

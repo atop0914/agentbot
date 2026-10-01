@@ -10,7 +10,7 @@ import (
 
 // TemplateService implements the Service interface.
 type TemplateService struct {
-	repo   Repository
+	repo     Repository
 	execRepo ExecRepository
 }
 

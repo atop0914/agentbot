@@ -60,10 +60,10 @@ func TestMemoryRegistry_RegisterDuplicate(t *testing.T) {
 	registerTestAdapter(t, svc, "email-1", "agent-1", AdapterTypeEmail)
 
 	cfg := &Config{
-		ID:      "email-1",
-		Name:    "Duplicate",
-		Type:    AdapterTypeEmail,
-		AgentID: "agent-1",
+		ID:       "email-1",
+		Name:     "Duplicate",
+		Type:     AdapterTypeEmail,
+		AgentID:  "agent-1",
 		Settings: map[string]string{"smtp_host": "smtp.example.com"},
 	}
 	_, err := svc.Register(context.Background(), cfg)

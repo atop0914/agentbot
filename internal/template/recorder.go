@@ -10,13 +10,13 @@ import (
 
 // InMemoryRecorder implements the Recorder interface for workflow recording.
 type InMemoryRecorder struct {
-	mu       sync.Mutex
-	repo     Repository
+	mu        sync.Mutex
+	repo      Repository
 	recording bool
-	agentID  string
-	name     string
-	steps    []Step
-	results  []StepResult
+	agentID   string
+	name      string
+	steps     []Step
+	results   []StepResult
 }
 
 // NewInMemoryRecorder creates a new in-memory workflow recorder.

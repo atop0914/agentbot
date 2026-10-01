@@ -18,16 +18,16 @@ import (
 // LocalManager 基于本地进程的环境管理器
 // 用于开发和测试环境，不依赖 Docker
 type LocalManager struct {
-	mu          sync.RWMutex
+	mu           sync.RWMutex
 	environments map[string]*localEnv
-	workDir     string
+	workDir      string
 }
 
 // localEnv 包装本地环境的额外状态
 type localEnv struct {
 	*Environment
-	process   *os.Process
-	workPath  string // 环境工作目录
+	process  *os.Process
+	workPath string // 环境工作目录
 }
 
 // NewLocalManager 创建本地管理器

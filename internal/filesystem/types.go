@@ -13,15 +13,15 @@ const (
 
 // FileInfo 文件信息
 type FileInfo struct {
-	Name         string    `json:"name"`
-	Path         string    `json:"path"`
-	Type         FileType  `json:"type"`
-	Size         int64     `json:"size"`
-	Mode         string    `json:"mode"`
-	ModTime      time.Time `json:"mod_time"`
-	IsHidden     bool      `json:"is_hidden"`
-	MimeType     string    `json:"mime_type,omitempty"`
-	Checksum     string    `json:"checksum,omitempty"`
+	Name     string    `json:"name"`
+	Path     string    `json:"path"`
+	Type     FileType  `json:"type"`
+	Size     int64     `json:"size"`
+	Mode     string    `json:"mode"`
+	ModTime  time.Time `json:"mod_time"`
+	IsHidden bool      `json:"is_hidden"`
+	MimeType string    `json:"mime_type,omitempty"`
+	Checksum string    `json:"checksum,omitempty"`
 }
 
 // FileContent 文件内容
@@ -33,10 +33,10 @@ type FileContent struct {
 
 // UploadRequest 上传请求
 type UploadRequest struct {
-	Path     string `json:"path" binding:"required"`
-	Content  []byte `json:"content" binding:"required"`
-	Encoding string `json:"encoding"` // "raw", "base64"; default "raw"
-	Overwrite bool  `json:"overwrite"`
+	Path      string `json:"path" binding:"required"`
+	Content   []byte `json:"content" binding:"required"`
+	Encoding  string `json:"encoding"` // "raw", "base64"; default "raw"
+	Overwrite bool   `json:"overwrite"`
 }
 
 // DownloadRequest 下载请求
@@ -75,8 +75,8 @@ type CopyRequest struct {
 type SearchRequest struct {
 	Path    string `json:"path" binding:"required"`
 	Pattern string `json:"pattern" binding:"required"` // 文件名 glob 模式
-	Content string `json:"content,omitempty"`           // 内容关键字
-	MaxSize int64  `json:"max_size,omitempty"`          // 最大文件大小
+	Content string `json:"content,omitempty"`          // 内容关键字
+	MaxSize int64  `json:"max_size,omitempty"`         // 最大文件大小
 }
 
 // SearchResult 搜索结果

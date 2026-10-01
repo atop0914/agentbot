@@ -8,10 +8,10 @@ import (
 type SessionState string
 
 const (
-	StateIdle     SessionState = "idle"
-	StateRunning  SessionState = "running"
-	StateClosed   SessionState = "closed"
-	StateError    SessionState = "error"
+	StateIdle    SessionState = "idle"
+	StateRunning SessionState = "running"
+	StateClosed  SessionState = "closed"
+	StateError   SessionState = "error"
 )
 
 // ConnectionType 连接类型
@@ -25,19 +25,19 @@ const (
 
 // Session 终端会话
 type Session struct {
-	ID           string         `json:"id"`
-	AgentID      string         `json:"agent_id"`
-	EnvID        string         `json:"env_id,omitempty"`
-	Type         ConnectionType `json:"type"`
-	State        SessionState   `json:"state"`
-	Shell        string         `json:"shell"`
-	WorkingDir   string         `json:"working_dir"`
-	Rows         int            `json:"rows"`
-	Cols         int            `json:"cols"`
-	StartedAt    time.Time      `json:"started_at"`
-	LastActiveAt time.Time      `json:"last_active_at"`
-	ClosedAt     *time.Time     `json:"closed_at,omitempty"`
-	ExitCode     *int           `json:"exit_code,omitempty"`
+	ID           string            `json:"id"`
+	AgentID      string            `json:"agent_id"`
+	EnvID        string            `json:"env_id,omitempty"`
+	Type         ConnectionType    `json:"type"`
+	State        SessionState      `json:"state"`
+	Shell        string            `json:"shell"`
+	WorkingDir   string            `json:"working_dir"`
+	Rows         int               `json:"rows"`
+	Cols         int               `json:"cols"`
+	StartedAt    time.Time         `json:"started_at"`
+	LastActiveAt time.Time         `json:"last_active_at"`
+	ClosedAt     *time.Time        `json:"closed_at,omitempty"`
+	ExitCode     *int              `json:"exit_code,omitempty"`
 	Metadata     map[string]string `json:"metadata,omitempty"`
 }
 

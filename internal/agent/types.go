@@ -78,12 +78,12 @@ const (
 
 // Subtask represents a decomposed task unit
 type Subtask struct {
-	ID       string    `json:"id"`
-	TaskID   string    `json:"task_id"`
-	Name     string    `json:"name"`
-	State    TaskState `json:"state"`
-	Result   string    `json:"result,omitempty"`
-	DependsOn []string `json:"depends_on,omitempty"`
+	ID        string    `json:"id"`
+	TaskID    string    `json:"task_id"`
+	Name      string    `json:"name"`
+	State     TaskState `json:"state"`
+	Result    string    `json:"result,omitempty"`
+	DependsOn []string  `json:"depends_on,omitempty"`
 }
 
 // Repository defines the interface for agent persistence
@@ -112,9 +112,9 @@ type Service interface {
 
 // CreateRequest defines the request to create an agent
 type CreateRequest struct {
-	Name        string         `json:"name" validate:"required"`
-	Description string         `json:"description"`
-	Config      Config         `json:"config"`
+	Name        string `json:"name" validate:"required"`
+	Description string `json:"description"`
+	Config      Config `json:"config"`
 }
 
 // UpdateRequest defines the request to update an agent

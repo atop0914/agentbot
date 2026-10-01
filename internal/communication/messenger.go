@@ -11,9 +11,9 @@ import (
 
 // MessengerConfig holds configuration for the AgentMessenger.
 type MessengerConfig struct {
-	DefaultTTL      time.Duration // default message TTL, 0 = no expiry
-	RequestTimeout  time.Duration // default timeout for request-response
-	MaxPendingReqs  int           // max pending requests per agent
+	DefaultTTL     time.Duration // default message TTL, 0 = no expiry
+	RequestTimeout time.Duration // default timeout for request-response
+	MaxPendingReqs int           // max pending requests per agent
 }
 
 // DefaultMessengerConfig returns sensible defaults.

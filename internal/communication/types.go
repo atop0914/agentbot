@@ -7,14 +7,14 @@ import (
 
 // Message represents a message in the system
 type Message struct {
-	ID        string    `json:"id"`
-	From      string    `json:"from"`      // agent ID or user ID
-	To        string    `json:"to"`        // agent ID or group ID
-	GroupID   string    `json:"group_id,omitempty"`
-	Type      MessageType `json:"type"`
-	Content   string    `json:"content"`
+	ID        string            `json:"id"`
+	From      string            `json:"from"` // agent ID or user ID
+	To        string            `json:"to"`   // agent ID or group ID
+	GroupID   string            `json:"group_id,omitempty"`
+	Type      MessageType       `json:"type"`
+	Content   string            `json:"content"`
 	Metadata  map[string]string `json:"metadata,omitempty"`
-	Timestamp time.Time `json:"timestamp"`
+	Timestamp time.Time         `json:"timestamp"`
 }
 
 // MessageType represents the type of message
@@ -41,19 +41,19 @@ type Group struct {
 
 // Channel represents a communication channel
 type Channel struct {
-	ID        string    `json:"id"`
+	ID        string      `json:"id"`
 	Type      ChannelType `json:"type"`
-	Name      string    `json:"name"`
-	Members   []string  `json:"members"`
-	CreatedAt time.Time `json:"created_at"`
+	Name      string      `json:"name"`
+	Members   []string    `json:"members"`
+	CreatedAt time.Time   `json:"created_at"`
 }
 
 // ChannelType represents the type of channel
 type ChannelType string
 
 const (
-	ChannelDirect ChannelType = "direct" // 1-on-1
-	ChannelGroup  ChannelType = "group"  // group chat
+	ChannelDirect    ChannelType = "direct"    // 1-on-1
+	ChannelGroup     ChannelType = "group"     // group chat
 	ChannelBroadcast ChannelType = "broadcast" // one-to-many
 )
 
@@ -75,7 +75,7 @@ type Service interface {
 	GetMessages(ctx context.Context, agentID string, limit int) ([]Message, error)
 	// GetConversation retrieves conversation between two agents
 	GetConversation(ctx context.Context, agent1, agent2 string, limit int) ([]Message, error)
-	
+
 	// CreateGroup creates a new group
 	CreateGroup(ctx context.Context, group Group) (*Group, error)
 	// GetGroup returns a group by ID
@@ -86,7 +86,7 @@ type Service interface {
 	AddToGroup(ctx context.Context, groupID, agentID string) error
 	// RemoveFromGroup removes an agent from a group
 	RemoveFromGroup(ctx context.Context, groupID, agentID string) error
-	
+
 	// CreateChannel creates a new channel
 	CreateChannel(ctx context.Context, channel Channel) (*Channel, error)
 	// GetChannel returns a channel by ID

@@ -7,18 +7,18 @@ import (
 
 // MarketplaceEntry represents a template published to the marketplace.
 type MarketplaceEntry struct {
-	TemplateID    string    `json:"template_id"`
-	Version       string    `json:"version"`
-	Summary       string    `json:"summary"`
-	License       string    `json:"license,omitempty"`
-	Homepage      string    `json:"homepage,omitempty"`
-	Downloads     int       `json:"downloads"`
-	Installs      int       `json:"installs"`
-	Featured      bool      `json:"featured"`
-	Verified      bool      `json:"verified"`
-	Status        ListingStatus `json:"status"`
-	PublishedAt   time.Time `json:"published_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	TemplateID  string        `json:"template_id"`
+	Version     string        `json:"version"`
+	Summary     string        `json:"summary"`
+	License     string        `json:"license,omitempty"`
+	Homepage    string        `json:"homepage,omitempty"`
+	Downloads   int           `json:"downloads"`
+	Installs    int           `json:"installs"`
+	Featured    bool          `json:"featured"`
+	Verified    bool          `json:"verified"`
+	Status      ListingStatus `json:"status"`
+	PublishedAt time.Time     `json:"published_at"`
+	UpdatedAt   time.Time     `json:"updated_at"`
 }
 
 // ListingStatus represents the status of a marketplace listing.
@@ -43,25 +43,25 @@ type Review struct {
 
 // ListingFilter defines filters for browsing the marketplace.
 type ListingFilter struct {
-	Category   string   `json:"category,omitempty"`
-	Tags       []string `json:"tags,omitempty"`
-	Search     string   `json:"search,omitempty"`
-	MinRating  float64  `json:"min_rating,omitempty"`
-	Featured   *bool    `json:"featured,omitempty"`
-	Verified   *bool    `json:"verified,omitempty"`
-	SortBy     string   `json:"sort_by,omitempty"`  // "downloads", "rating", "published_at", "installs"
-	SortOrder  string   `json:"sort_order,omitempty"` // "asc", "desc"
-	Limit      int      `json:"limit,omitempty"`
-	Offset     int      `json:"offset,omitempty"`
+	Category  string   `json:"category,omitempty"`
+	Tags      []string `json:"tags,omitempty"`
+	Search    string   `json:"search,omitempty"`
+	MinRating float64  `json:"min_rating,omitempty"`
+	Featured  *bool    `json:"featured,omitempty"`
+	Verified  *bool    `json:"verified,omitempty"`
+	SortBy    string   `json:"sort_by,omitempty"`    // "downloads", "rating", "published_at", "installs"
+	SortOrder string   `json:"sort_order,omitempty"` // "asc", "desc"
+	Limit     int      `json:"limit,omitempty"`
+	Offset    int      `json:"offset,omitempty"`
 }
 
 // MarketplaceStats holds aggregate marketplace statistics.
 type MarketplaceStats struct {
-	TotalListings int     `json:"total_listings"`
-	TotalDownloads int    `json:"total_downloads"`
-	TotalInstalls int    `json:"total_installs"`
-	AvgRating     float64 `json:"avg_rating"`
-	Categories    []CategoryCount `json:"categories"`
+	TotalListings  int             `json:"total_listings"`
+	TotalDownloads int             `json:"total_downloads"`
+	TotalInstalls  int             `json:"total_installs"`
+	AvgRating      float64         `json:"avg_rating"`
+	Categories     []CategoryCount `json:"categories"`
 }
 
 // CategoryCount holds a category name and its count.

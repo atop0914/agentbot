@@ -230,15 +230,15 @@ func applyEnvDefaults(config *EnvironmentConfig) {
 
 // EnvResponse 环境 API 响应
 type EnvResponse struct {
-	ID          string          `json:"id"`
-	AgentID     string          `json:"agent_id"`
-	Type        EnvironmentType `json:"type"`
+	ID          string           `json:"id"`
+	AgentID     string           `json:"agent_id"`
+	Type        EnvironmentType  `json:"type"`
 	State       EnvironmentState `json:"state"`
-	ContainerID string          `json:"container_id,omitempty"`
-	Resources   Resources       `json:"resources"`
-	Network     NetworkConfig   `json:"network"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
+	ContainerID string           `json:"container_id,omitempty"`
+	Resources   Resources        `json:"resources"`
+	Network     NetworkConfig    `json:"network"`
+	CreatedAt   time.Time        `json:"created_at"`
+	UpdatedAt   time.Time        `json:"updated_at"`
 }
 
 // ToResponse 转换为 API 响应格式

@@ -55,16 +55,16 @@ type Action struct {
 type ActionType string
 
 const (
-	ActionNavigate    ActionType = "navigate"
-	ActionClick       ActionType = "click"
-	ActionInput       ActionType = "input"
-	ActionSelect      ActionType = "select"
-	ActionScreenshot  ActionType = "screenshot"
-	ActionExtract     ActionType = "extract"
-	ActionWait        ActionType = "wait"
-	ActionScroll      ActionType = "scroll"
-	ActionKeyPress    ActionType = "keypress"
-	ActionHover       ActionType = "hover"
+	ActionNavigate   ActionType = "navigate"
+	ActionClick      ActionType = "click"
+	ActionInput      ActionType = "input"
+	ActionSelect     ActionType = "select"
+	ActionScreenshot ActionType = "screenshot"
+	ActionExtract    ActionType = "extract"
+	ActionWait       ActionType = "wait"
+	ActionScroll     ActionType = "scroll"
+	ActionKeyPress   ActionType = "keypress"
+	ActionHover      ActionType = "hover"
 )
 
 // Service defines browser automation interface
@@ -75,19 +75,19 @@ type Service interface {
 	CloseBrowser(ctx context.Context, browserID string) error
 	// GetBrowser returns browser info
 	GetBrowser(ctx context.Context, browserID string) (*Browser, error)
-	
+
 	// Navigate navigates to a URL
 	Navigate(ctx context.Context, browserID string, url string) (*Page, error)
 	// GetCurrentPage returns the current page
 	GetCurrentPage(ctx context.Context, browserID string) (*Page, error)
-	
+
 	// ExecuteAction executes a browser action
 	ExecuteAction(ctx context.Context, browserID string, action Action) (result string, err error)
 	// Screenshot takes a screenshot
 	Screenshot(ctx context.Context, browserID string) ([]byte, error)
 	// ExtractText extracts text from page
 	ExtractText(ctx context.Context, browserID string, selector string) (string, error)
-	
+
 	// ImportProfile imports a Chrome profile
 	ImportProfile(ctx context.Context, profileData []byte) (*Profile, error)
 	// ExportProfile exports a browser profile

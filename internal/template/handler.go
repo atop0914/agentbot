@@ -254,8 +254,8 @@ func (h *Handler) handleRecordStep(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonOK(w, map[string]interface{}{
-		"status":      "recorded",
-		"step_count":  h.recorder.StepCount(),
+		"status":     "recorded",
+		"step_count": h.recorder.StepCount(),
 	})
 }
 

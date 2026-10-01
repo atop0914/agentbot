@@ -14,8 +14,8 @@ import (
 // LocalService implements Service using in-memory storage.
 // Browser actions are simulated locally (no real browser process).
 type LocalService struct {
-	repo    Repository
-	mu      sync.Mutex
+	repo Repository
+	mu   sync.Mutex
 	// recordings tracks action recordings per browser
 	recordings map[string][]Action
 	recMu      sync.RWMutex

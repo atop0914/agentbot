@@ -24,8 +24,8 @@ type ReviewRepository interface {
 
 // InMemoryMarketplaceRepo is an in-memory marketplace repository.
 type InMemoryMarketplaceRepo struct {
-	mu    sync.RWMutex
-	data  map[string]*MarketplaceEntry // keyed by template_id
+	mu   sync.RWMutex
+	data map[string]*MarketplaceEntry // keyed by template_id
 }
 
 // NewInMemoryMarketplaceRepo creates a new in-memory marketplace repo.
@@ -142,8 +142,8 @@ func sortListings(entries []*MarketplaceEntry, sortBy, order string) {
 
 // InMemoryReviewRepo is an in-memory review repository.
 type InMemoryReviewRepo struct {
-	mu    sync.RWMutex
-	data  map[string][]*Review // keyed by template_id
+	mu   sync.RWMutex
+	data map[string][]*Review // keyed by template_id
 }
 
 // NewInMemoryReviewRepo creates a new in-memory review repo.

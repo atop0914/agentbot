@@ -126,8 +126,8 @@ type WorkflowTemplate struct {
 
 // Step represents a step in a workflow template
 type Step struct {
-	Name     string     `json:"name"`
-	Action   ActionType `json:"action"`
+	Name     string            `json:"name"`
+	Action   ActionType        `json:"action"`
 	Params   map[string]string `json:"params"`
-	Optional bool       `json:"optional"`
+	Optional bool              `json:"optional"`
 }

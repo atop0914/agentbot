@@ -8,19 +8,19 @@ import (
 
 // PresenceEntry tracks a single agent's presence state.
 type PresenceEntry struct {
-	AgentID   string            `json:"agent_id"`
-	Status    AgentStatus       `json:"status"`
-	LastSeen  time.Time         `json:"last_seen"`
-	Metadata  map[string]string `json:"metadata,omitempty"`
+	AgentID  string            `json:"agent_id"`
+	Status   AgentStatus       `json:"status"`
+	LastSeen time.Time         `json:"last_seen"`
+	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
 // PresenceManager tracks online/offline status of all agents.
 // It provides heartbeat-based liveness detection and status queries.
 type PresenceManager struct {
-	mu       sync.RWMutex
-	entries  map[string]*PresenceEntry
-	timeout  time.Duration // how long before an agent is considered offline
-	stopCh   chan struct{}
+	mu      sync.RWMutex
+	entries map[string]*PresenceEntry
+	timeout time.Duration // how long before an agent is considered offline
+	stopCh  chan struct{}
 }
 
 // NewPresenceManager creates a new PresenceManager.

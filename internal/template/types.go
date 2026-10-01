@@ -7,19 +7,19 @@ import (
 
 // Template represents a workflow template
 type Template struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	Category    string    `json:"category"`
-	Author      string    `json:"author"`
-	Steps       []Step    `json:"steps"`
+	ID          string     `json:"id"`
+	Name        string     `json:"name"`
+	Description string     `json:"description"`
+	Category    string     `json:"category"`
+	Author      string     `json:"author"`
+	Steps       []Step     `json:"steps"`
 	Variables   []Variable `json:"variables,omitempty"`
-	Tags        []string  `json:"tags,omitempty"`
-	Public      bool      `json:"public"`
-	UsageCount  int       `json:"usage_count"`
-	Rating      float64   `json:"rating"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	Tags        []string   `json:"tags,omitempty"`
+	Public      bool       `json:"public"`
+	UsageCount  int        `json:"usage_count"`
+	Rating      float64    `json:"rating"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
 // Step represents a step in a template
@@ -59,26 +59,26 @@ type Variable struct {
 
 // Execution represents a template execution
 type Execution struct {
-	ID          string        `json:"id"`
-	TemplateID  string        `json:"template_id"`
-	AgentID     string        `json:"agent_id"`
-	Status      string        `json:"status"` // "running", "completed", "failed"
+	ID          string            `json:"id"`
+	TemplateID  string            `json:"template_id"`
+	AgentID     string            `json:"agent_id"`
+	Status      string            `json:"status"` // "running", "completed", "failed"
 	Variables   map[string]string `json:"variables"`
-	Results     []StepResult  `json:"results"`
-	StartedAt   time.Time     `json:"started_at"`
-	CompletedAt time.Time     `json:"completed_at,omitempty"`
-	Error       string        `json:"error,omitempty"`
+	Results     []StepResult      `json:"results"`
+	StartedAt   time.Time         `json:"started_at"`
+	CompletedAt time.Time         `json:"completed_at,omitempty"`
+	Error       string            `json:"error,omitempty"`
 }
 
 // StepResult represents the result of a step execution
 type StepResult struct {
-	StepID    string    `json:"step_id"`
-	Status    string    `json:"status"`
-	Output    string    `json:"output,omitempty"`
-	Error     string    `json:"error,omitempty"`
+	StepID    string        `json:"step_id"`
+	Status    string        `json:"status"`
+	Output    string        `json:"output,omitempty"`
+	Error     string        `json:"error,omitempty"`
 	Duration  time.Duration `json:"duration"`
-	StartedAt time.Time `json:"started_at"`
-	EndedAt   time.Time `json:"ended_at,omitempty"`
+	StartedAt time.Time     `json:"started_at"`
+	EndedAt   time.Time     `json:"ended_at,omitempty"`
 }
 
 // Service defines the template service interface
@@ -93,14 +93,14 @@ type Service interface {
 	Delete(ctx context.Context, id string) error
 	// List lists templates
 	List(ctx context.Context, filter Filter) ([]*Template, error)
-	
+
 	// Execute executes a template
 	Execute(ctx context.Context, templateID string, agentID string, variables map[string]string) (*Execution, error)
 	// GetExecution returns an execution by ID
 	GetExecution(ctx context.Context, id string) (*Execution, error)
 	// ListExecutions lists executions for a template
 	ListExecutions(ctx context.Context, templateID string) ([]*Execution, error)
-	
+
 	// Share shares a template
 	Share(ctx context.Context, templateID string, userID string) error
 	// Unshare unshares a template
@@ -109,7 +109,7 @@ type Service interface {
 	Import(ctx context.Context, data []byte) (*Template, error)
 	// Export exports a template to file
 	Export(ctx context.Context, templateID string) ([]byte, error)
-	
+
 	// Rate rates a template
 	Rate(ctx context.Context, templateID string, rating float64) error
 	// GetPopular returns popular templates
@@ -127,7 +127,7 @@ type Filter struct {
 	Search    string   `json:"search,omitempty"`
 	Limit     int      `json:"limit,omitempty"`
 	Offset    int      `json:"offset,omitempty"`
-	SortBy    string   `json:"sort_by,omitempty"` // "name", "rating", "usage_count", "created_at"
+	SortBy    string   `json:"sort_by,omitempty"`    // "name", "rating", "usage_count", "created_at"
 	SortOrder string   `json:"sort_order,omitempty"` // "asc", "desc"
 }
 

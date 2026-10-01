@@ -29,17 +29,17 @@ const (
 // Envelope wraps a Message with protocol-level metadata for routing,
 // delivery tracking, and priority handling.
 type Envelope struct {
-	MessageID    string         `json:"message_id"`
-	From         string         `json:"from"`
-	To           string         `json:"to"`
-	GroupID      string         `json:"group_id,omitempty"`
-	Priority     Priority       `json:"priority"`
-	TTL          time.Duration  `json:"ttl,omitempty"`          // time-to-live, 0 = no expiry
-	RequireAck   bool           `json:"require_ack,omitempty"`  // request delivery acknowledgment
-	ReplyTo      string         `json:"reply_to,omitempty"`     // for request-response pattern
-	CorrelationID string        `json:"correlation_id,omitempty"` // groups related messages
-	CreatedAt    time.Time      `json:"created_at"`
-	Status       DeliveryStatus `json:"status"`
+	MessageID     string         `json:"message_id"`
+	From          string         `json:"from"`
+	To            string         `json:"to"`
+	GroupID       string         `json:"group_id,omitempty"`
+	Priority      Priority       `json:"priority"`
+	TTL           time.Duration  `json:"ttl,omitempty"`            // time-to-live, 0 = no expiry
+	RequireAck    bool           `json:"require_ack,omitempty"`    // request delivery acknowledgment
+	ReplyTo       string         `json:"reply_to,omitempty"`       // for request-response pattern
+	CorrelationID string         `json:"correlation_id,omitempty"` // groups related messages
+	CreatedAt     time.Time      `json:"created_at"`
+	Status        DeliveryStatus `json:"status"`
 }
 
 // Ack represents a delivery/read acknowledgment.
@@ -52,15 +52,15 @@ type Ack struct {
 
 // RequestEnvelope is a structured request from one agent to another.
 type RequestEnvelope struct {
-	RequestID    string            `json:"request_id"`
-	From         string            `json:"from"`
-	To           string            `json:"to"`
-	Action       string            `json:"action"`
-	Params       map[string]string `json:"params,omitempty"`
-	Priority     Priority          `json:"priority"`
-	Timeout      time.Duration     `json:"timeout,omitempty"`
-	CorrelationID string           `json:"correlation_id,omitempty"`
-	CreatedAt    time.Time         `json:"created_at"`
+	RequestID     string            `json:"request_id"`
+	From          string            `json:"from"`
+	To            string            `json:"to"`
+	Action        string            `json:"action"`
+	Params        map[string]string `json:"params,omitempty"`
+	Priority      Priority          `json:"priority"`
+	Timeout       time.Duration     `json:"timeout,omitempty"`
+	CorrelationID string            `json:"correlation_id,omitempty"`
+	CreatedAt     time.Time         `json:"created_at"`
 }
 
 // ResponseEnvelope is the reply to a RequestEnvelope.

@@ -32,22 +32,22 @@ const (
 
 // MemoryEntry 记忆条目
 type MemoryEntry struct {
-	ID        string            `json:"id"`
-	AgentID   string            `json:"agent_id"`
-	UserID    string            `json:"user_id,omitempty"`
-	Type      MemoryType        `json:"type"`
-	Scope     MemoryScope       `json:"scope"`
-	Content   string            `json:"content"`
-	Summary   string            `json:"summary,omitempty"`
-	Tags      []string          `json:"tags,omitempty"`
-	Metadata  map[string]string `json:"metadata,omitempty"`
-	Importance float64          `json:"importance"` // 0.0-1.0 重要性评分
-	TTL       *time.Duration    `json:"ttl,omitempty"`
-	CreatedAt time.Time         `json:"created_at"`
-	UpdatedAt time.Time         `json:"updated_at"`
-	ExpiresAt *time.Time        `json:"expires_at,omitempty"`
-	AccessCount int             `json:"access_count"`
-	LastAccessAt *time.Time     `json:"last_access_at,omitempty"`
+	ID           string            `json:"id"`
+	AgentID      string            `json:"agent_id"`
+	UserID       string            `json:"user_id,omitempty"`
+	Type         MemoryType        `json:"type"`
+	Scope        MemoryScope       `json:"scope"`
+	Content      string            `json:"content"`
+	Summary      string            `json:"summary,omitempty"`
+	Tags         []string          `json:"tags,omitempty"`
+	Metadata     map[string]string `json:"metadata,omitempty"`
+	Importance   float64           `json:"importance"` // 0.0-1.0 重要性评分
+	TTL          *time.Duration    `json:"ttl,omitempty"`
+	CreatedAt    time.Time         `json:"created_at"`
+	UpdatedAt    time.Time         `json:"updated_at"`
+	ExpiresAt    *time.Time        `json:"expires_at,omitempty"`
+	AccessCount  int               `json:"access_count"`
+	LastAccessAt *time.Time        `json:"last_access_at,omitempty"`
 }
 
 // IsExpired 检查记忆是否已过期
@@ -90,15 +90,15 @@ type UpdateMemoryRequest struct {
 
 // SearchMemoryRequest 搜索记忆请求
 type SearchMemoryRequest struct {
-	AgentID  string       `json:"agent_id,omitempty"`
-	UserID   string       `json:"user_id,omitempty"`
-	Type     MemoryType   `json:"type,omitempty"`
-	Scope    MemoryScope  `json:"scope,omitempty"`
-	Query    string       `json:"query,omitempty"`
-	Tags     []string     `json:"tags,omitempty"`
-	MinScore float64      `json:"min_score,omitempty"`
-	Limit    int          `json:"limit,omitempty"`
-	Offset   int          `json:"offset,omitempty"`
+	AgentID  string      `json:"agent_id,omitempty"`
+	UserID   string      `json:"user_id,omitempty"`
+	Type     MemoryType  `json:"type,omitempty"`
+	Scope    MemoryScope `json:"scope,omitempty"`
+	Query    string      `json:"query,omitempty"`
+	Tags     []string    `json:"tags,omitempty"`
+	MinScore float64     `json:"min_score,omitempty"`
+	Limit    int         `json:"limit,omitempty"`
+	Offset   int         `json:"offset,omitempty"`
 }
 
 // MemoryStats 记忆统计
