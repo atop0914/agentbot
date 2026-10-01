@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -79,6 +80,44 @@ func (f *fakeAuditSource) Count(_ context.Context, _ *time.Time) (int, error) {
 		return 0, f.err
 	}
 	return len(f.items), nil
+}
+
+// fakeUserSource 是 UserSource 的测试替身。
+type fakeUserSource struct {
+	items []*UserView
+	total int
+	err   error
+}
+
+func (f *fakeUserSource) ListUsers(_ context.Context, offset, limit int) ([]*UserView, int, error) {
+	if f.err != nil {
+		return nil, 0, f.err
+	}
+	total := f.total
+	if total == 0 {
+		total = len(f.items)
+	}
+	if offset >= len(f.items) {
+		return []*UserView{}, total, nil
+	}
+	end := offset + limit
+	if limit <= 0 || end > len(f.items) {
+		end = len(f.items)
+	}
+	return f.items[offset:end], total, nil
+}
+
+// fakeAuthzSource 是 AuthzSource 的测试替身。
+type fakeAuthzSource struct {
+	stats *AuthzStats
+	err   error
+}
+
+func (f *fakeAuthzSource) Stats(_ context.Context) (*AuthzStats, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.stats, nil
 }
 
 func baseTime() time.Time {
@@ -262,6 +301,11 @@ func TestSnapshotOverviewAggregatesAllSources(t *testing.T) {
 		Audit: &fakeAuditSource{items: []*AuditView{
 			{ID: "e1", Action: "agent.created", Timestamp: now},
 		}},
+		Users: &fakeUserSource{items: []*UserView{
+			{ID: "u1", Username: "alice", Email: "alice@example.com", Status: "active", Role: "admin", Provider: "password", CreatedAt: now},
+			{ID: "u2", Username: "bob", Email: "bob@example.com", Status: "inactive", Role: "user", Provider: "github", CreatedAt: now.Add(-time.Minute)},
+		}, total: 2},
+		Authz: &fakeAuthzSource{stats: &AuthzStats{TotalAssignments: 3, UserAssignments: 2, AgentAssignments: 1, ByRole: map[string]int{"role-worker": 1}}},
 	}
 	svc := newTestService(t, src)
 
@@ -290,6 +334,74 @@ func TestSnapshotOverviewAggregatesAllSources(t *testing.T) {
 	}
 	if snap.Errors != nil {
 		t.Errorf("Errors = %v, want nil", snap.Errors)
+	}
+}
+
+// TestSnapshotUserDigestAggregates 验证 users 分区把用户分布与授权链统计一起聚合。
+func TestSnapshotUserDigestAggregates(t *testing.T) {
+	now := baseTime()
+	src := Sources{
+		Users: &fakeUserSource{items: []*UserView{
+			{ID: "u1", Username: "alice", Status: "active", Role: "admin", Provider: "password", CreatedAt: now},
+			{ID: "u2", Username: "bob", Status: "inactive", Role: "user", Provider: "github", CreatedAt: now.Add(-time.Minute)},
+			{ID: "u3", Username: "carol", Status: "active", Role: "user", Provider: "github", CreatedAt: now.Add(-2 * time.Minute)},
+		}},
+		Authz: &fakeAuthzSource{stats: &AuthzStats{
+			TotalAssignments: 4, UserAssignments: 3, AgentAssignments: 1,
+			ByRole: map[string]int{"role-worker": 2}, Decisions: 9, Denials: 2,
+		}},
+	}
+	svc := newTestService(t, src)
+
+	snap, err := svc.Snapshot(context.Background(), SnapshotQuery{Sections: []Section{SectionUsers}})
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if snap.Users == nil {
+		t.Fatal("Users digest is nil")
+	}
+	if snap.Users.Total != 3 {
+		t.Errorf("Total = %d, want 3", snap.Users.Total)
+	}
+	if snap.Users.ByStatus["active"] != 2 || snap.Users.ByStatus["inactive"] != 1 {
+		t.Errorf("ByStatus = %v, want active:2 inactive:1", snap.Users.ByStatus)
+	}
+	if snap.Users.ByProvider["github"] != 2 {
+		t.Errorf("ByProvider = %v, want github:2", snap.Users.ByProvider)
+	}
+	if snap.Users.Authz == nil || snap.Users.Authz.Denials != 2 {
+		t.Errorf("Authz stats not aggregated: %+v", snap.Users.Authz)
+	}
+	// 最近列表必须按创建时间倒序且稳定。
+	if len(snap.Users.Recent) != 3 {
+		t.Fatalf("Recent has %d entries, want 3", len(snap.Users.Recent))
+	}
+	if snap.Users.Recent[0].ID != "u1" || snap.Users.Recent[2].ID != "u3" {
+		t.Errorf("Recent order = %s..%s, want u1..u3", snap.Users.Recent[0].ID, snap.Users.Recent[2].ID)
+	}
+}
+
+// TestSnapshotUserDigestDegradesIndependently users 分区失败不能拖垮其他分区。
+func TestSnapshotUserDigestDegradesIndependently(t *testing.T) {
+	src := Sources{
+		Agents: &fakeAgentSource{items: []*AgentView{{ID: "a1", State: "running", UpdatedAt: baseTime()}}},
+		Users:  &fakeUserSource{err: fmt.Errorf("user backend down")},
+		Authz:  &fakeAuthzSource{stats: &AuthzStats{TotalAssignments: 1}},
+	}
+	svc := newTestService(t, src)
+
+	snap, err := svc.Snapshot(context.Background(), SnapshotQuery{})
+	if err != nil {
+		t.Fatalf("Snapshot must not fail when one source degrades: %v", err)
+	}
+	if snap.Users != nil {
+		t.Error("Users digest should be nil when its source fails")
+	}
+	if _, ok := snap.Errors[string(SectionUsers)]; !ok {
+		t.Errorf("Errors missing users entry: %v", snap.Errors)
+	}
+	if snap.Agents == nil || snap.Agents.Total != 1 {
+		t.Error("agents section should still render")
 	}
 }
 
@@ -351,11 +463,16 @@ func TestSnapshotDoesNotPanicWithNoSources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
-	if len(snap.Errors) != 4 {
-		t.Errorf("Errors has %d entries, want 4 (one per unconfigured source)", len(snap.Errors))
+	// 未装配的数据源：agents / tasks / alerts / audit / users 五个分区降级。
+	// plugins 与 static 不依赖外部数据源，因此仍能正常渲染。
+	if len(snap.Errors) != 5 {
+		t.Errorf("Errors has %d entries, want 5 (one per unconfigured source): %v", len(snap.Errors), snap.Errors)
 	}
 	if snap.Overview == nil || !snap.Overview.Degraded {
 		t.Error("Overview should be present and marked degraded")
+	}
+	if snap.Plugins == nil || snap.Static == nil {
+		t.Error("sections without an external source should still render")
 	}
 }
 

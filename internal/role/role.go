@@ -88,6 +88,8 @@ func coordinatorPermissions() []Permission {
 		PermMemoryRead, PermMemoryWrite,
 		// Role management
 		PermRoleAssign, PermRoleRevoke, PermRoleManage,
+		// User management
+		PermUserRead, PermUserCreate, PermUserUpdate, PermUserDelete, PermUserActivate,
 	}
 }
 
@@ -155,6 +157,8 @@ func AllPermissions() []Permission {
 		PermBrowserUse,
 		PermMemoryRead, PermMemoryWrite,
 		PermRoleAssign, PermRoleRevoke, PermRoleManage,
+		// User administration is part of full system control.
+		PermUserRead, PermUserCreate, PermUserUpdate, PermUserDelete, PermUserActivate,
 	}
 }
 

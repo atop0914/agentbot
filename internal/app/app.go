@@ -11,6 +11,7 @@ import (
 	"github.com/atop0914/agentbot/internal/agent"
 	"github.com/atop0914/agentbot/internal/audit"
 	"github.com/atop0914/agentbot/internal/auth"
+	"github.com/atop0914/agentbot/internal/authz"
 	"github.com/atop0914/agentbot/internal/browser"
 	"github.com/atop0914/agentbot/internal/cloud"
 	"github.com/atop0914/agentbot/internal/communication"
@@ -54,6 +55,9 @@ type App struct {
 	MemoryH      *memory.Handler
 	RoleSvc      role.Service
 	RoleH        *role.Handler
+	AuthzSvc     authz.Service
+	AuthzH       *authz.Handler
+	UserAdminH   *user.AdminHandler
 	TemplateH    *template.Handler
 	MarketplaceH *template.MarketplaceHandler
 	MonitorSvc   monitor.Service
@@ -150,6 +154,18 @@ func New() *App {
 	roleSvc := role.NewService(roleRepo)
 	roleH := role.NewHandler(roleSvc)
 
+	// Authorization chain (user/agent -> role -> permission) — RBAC.
+	//
+	// 权限判定是平台的安全边界，因此它依赖的是**具体的** agent/user 服务而非接口，
+	// 保证装配期就能发现缺失依赖（而不是运行时以 503 的形式暴露）。
+	authzTargets := authz.NewTargetRegistry()
+	registerAuthzTargets(authzTargets, agentSvc, userSvc)
+	authzSvc := authz.NewService(authz.NewMemoryStore(), ensureRoleService(roleSvc), authzTargets)
+	authzH := authz.NewHandler(authzSvc, nil)
+	authzH.SetSubjectNameResolver(authzSubjectName(userSvc, agentSvc))
+	userAdminH := user.NewAdminHandler(userSvc)
+	userAdminH.SetAssignmentLister(userAssignments(authzSvc))
+
 	// Template system
 	tmplRepo := template.NewMemoryRepository()
 	tmplExecRepo := template.NewMemoryExecRepository()
@@ -197,6 +213,8 @@ func New() *App {
 		Tasks:   adminTaskSource{mgr: taskSvc},
 		Monitor: adminMonitorSource{svc: monitorSvc},
 		Audit:   adminAuditSource{svc: auditSvc},
+		Users:   adminUserSource{svc: userSvc},
+		Authz:   adminAuthzSource{svc: authzSvc},
 	}
 	adminSvc := admin.NewService(adminSources, "v1.0.0")
 	adminH := admin.NewHandler(adminSvc, adminConsoleDir)
@@ -225,6 +243,9 @@ func New() *App {
 		MemoryH:      memoryH,
 		RoleSvc:      roleSvc,
 		RoleH:        roleH,
+		AuthzSvc:     authzSvc,
+		AuthzH:       authzH,
+		UserAdminH:   userAdminH,
 		TemplateH:    tmplH,
 		MarketplaceH: marketplaceH,
 		MonitorSvc:   monitorSvc,

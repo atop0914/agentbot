@@ -28,39 +28,46 @@ const (
 	PermAgentControl Permission = "agent:control" // start/stop/pause/resume
 
 	// Task management permissions
-	PermTaskCreate   Permission = "task:create"
-	PermTaskRead     Permission = "task:read"
-	PermTaskAssign   Permission = "task:assign"
-	PermTaskCancel   Permission = "task:cancel"
-	PermTaskExecute  Permission = "task:execute"
+	PermTaskCreate  Permission = "task:create"
+	PermTaskRead    Permission = "task:read"
+	PermTaskAssign  Permission = "task:assign"
+	PermTaskCancel  Permission = "task:cancel"
+	PermTaskExecute Permission = "task:execute"
 
 	// Communication permissions
-	PermMessageSend    Permission = "message:send"
-	PermMessageRead    Permission = "message:read"
+	PermMessageSend      Permission = "message:send"
+	PermMessageRead      Permission = "message:read"
 	PermMessageBroadcast Permission = "message:broadcast"
 
 	// Environment permissions
-	PermEnvCreate    Permission = "env:create"
-	PermEnvRead      Permission = "env:read"
-	PermEnvDestroy   Permission = "env:destroy"
-	PermEnvExecute   Permission = "env:execute"
+	PermEnvCreate  Permission = "env:create"
+	PermEnvRead    Permission = "env:read"
+	PermEnvDestroy Permission = "env:destroy"
+	PermEnvExecute Permission = "env:execute"
 
 	// Filesystem permissions
-	PermFileRead     Permission = "file:read"
-	PermFileWrite    Permission = "file:write"
-	PermFileDelete   Permission = "file:delete"
+	PermFileRead   Permission = "file:read"
+	PermFileWrite  Permission = "file:write"
+	PermFileDelete Permission = "file:delete"
 
 	// Browser permissions
-	PermBrowserUse   Permission = "browser:use"
+	PermBrowserUse Permission = "browser:use"
 
 	// Memory permissions
-	PermMemoryRead   Permission = "memory:read"
-	PermMemoryWrite  Permission = "memory:write"
+	PermMemoryRead  Permission = "memory:read"
+	PermMemoryWrite Permission = "memory:write"
 
 	// Role management permissions (meta)
-	PermRoleAssign   Permission = "role:assign"
-	PermRoleRevoke   Permission = "role:revoke"
-	PermRoleManage   Permission = "role:manage"
+	PermRoleAssign Permission = "role:assign"
+	PermRoleRevoke Permission = "role:revoke"
+	PermRoleManage Permission = "role:manage"
+
+	// User management permissions (meta, 管理后台)
+	PermUserRead     Permission = "user:read"
+	PermUserCreate   Permission = "user:create"
+	PermUserUpdate   Permission = "user:update"
+	PermUserDelete   Permission = "user:delete"
+	PermUserActivate Permission = "user:activate" // 启用 / 停用 / 封禁
 )
 
 // Role represents an agent role with its capabilities.
@@ -77,11 +84,11 @@ type Role struct {
 
 // AgentRole represents the assignment of a role to an agent.
 type AgentRole struct {
-	ID        string    `json:"id"`
-	AgentID   string    `json:"agent_id"`
-	RoleID    string    `json:"role_id"`
-	RoleName  string    `json:"role_name"`
-	AssignedBy string   `json:"assigned_by"` // who assigned this role
+	ID         string    `json:"id"`
+	AgentID    string    `json:"agent_id"`
+	RoleID     string    `json:"role_id"`
+	RoleName   string    `json:"role_name"`
+	AssignedBy string    `json:"assigned_by"` // who assigned this role
 	AssignedAt time.Time `json:"assigned_at"`
 }
 

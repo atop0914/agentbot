@@ -1,7 +1,7 @@
 // Package admin 提供管理后台（Admin Console）的服务端能力。
 //
 // 本仓库是纯 Go 后端，不含 Node/前端工具链，因此「管理后台」在服务端的职责是：
-//  1. 把各业务模块（agent / task / monitor / audit / template ...）的统计聚合成
+//  1. 把各业务模块（agent / task / monitor / audit / template / user ...）的统计聚合成
 //     控制台首屏需要的单一视图，避免前端并发调用十几个接口；
 //  2. 托管将来由 React 构建产物提供的静态资源（产物缺失时给出明确占位，而不是 panic）；
 //  3. 管理控制台自身的展示配置与功能开关（FeatureFlags）。
@@ -15,7 +15,7 @@ import (
 // Section 表示聚合视图中的一个分区。
 //
 // 控制台首屏由若干分区拼装而成（概览卡片、Agent 分布、任务分布、
-// 告警列表、最近审计事件……）。每个分区独立可用性降级：某个下游模块
+// 告警列表、最近审计事件、用户与授权……）。每个分区独立可用性降级：某个下游模块
 // 返回错误时，仅该分区标记 unavailable，不影响其余分区渲染。
 type Section string
 
@@ -25,6 +25,7 @@ const (
 	SectionTasks       Section = "tasks"    // 任务状态分布
 	SectionAlerts      Section = "alerts"   // 未处理告警
 	SectionAudit       Section = "audit"    // 最近审计事件
+	SectionUsers       Section = "users"    // 用户与授权链（RBAC）
 	SectionPlugins     Section = "plugins"  // 功能开关
 	SectionStaticAsset Section = "static"   // 静态资源挂载状态
 )
@@ -37,6 +38,7 @@ func AllSections() []Section {
 		SectionTasks,
 		SectionAlerts,
 		SectionAudit,
+		SectionUsers,
 		SectionPlugins,
 		SectionStaticAsset,
 	}
@@ -62,6 +64,7 @@ type Snapshot struct {
 	Tasks       *TaskBreakdown     `json:"tasks,omitempty"`
 	Alerts      *AlertDigest       `json:"alerts,omitempty"`
 	Audit       *AuditDigest       `json:"audit,omitempty"`
+	Users       *UserDigest        `json:"users,omitempty"`
 	Plugins     *PluginDigest      `json:"plugins,omitempty"`
 	Static      *StaticMountStatus `json:"static,omitempty"`
 	Errors      map[string]string  `json:"errors,omitempty"`
@@ -137,6 +140,60 @@ type AuditBrief struct {
 	Resource   string    `json:"resource"`
 	ResourceID string    `json:"resource_id"`
 	Status     string    `json:"status"`
+}
+
+// UserDigest 是用户与授权链（RBAC）的摘要。
+type UserDigest struct {
+	Total      int            `json:"total"`
+	ByStatus   map[string]int `json:"by_status"`
+	ByRole     map[string]int `json:"by_role"`
+	ByProvider map[string]int `json:"by_provider"`
+	Recent     []UserSummary  `json:"recent,omitempty"`
+	Authz      *AuthzStats    `json:"authz,omitempty"`
+}
+
+// UserSummary 是用户的轻量视图（不含任何凭据字段）。
+type UserSummary struct {
+	ID        string    `json:"id"`
+	Username  string    `json:"username"`
+	Email     string    `json:"email"`
+	Status    string    `json:"status"`
+	Role      string    `json:"role"`
+	Provider  string    `json:"provider"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// AuthzStats 是授权链（用户/Agent → 角色 → 权限）的统计。
+type AuthzStats struct {
+	TotalAssignments int            `json:"total_assignments"`
+	UserAssignments  int            `json:"user_assignments"`
+	AgentAssignments int            `json:"agent_assignments"`
+	Expired          int            `json:"expired"`
+	ByRole           map[string]int `json:"by_role"`
+	Decisions        int            `json:"decisions"`
+	Denials          int            `json:"denials"`
+	Degraded         int            `json:"degraded"`
+}
+
+// UserView 是 admin 需要的用户字段子集（避免 admin 依赖 user 的完整模型）。
+type UserView struct {
+	ID        string
+	Username  string
+	Email     string
+	Status    string
+	Role      string
+	Provider  string
+	CreatedAt time.Time
+}
+
+// UserSource 由 internal/user.Service 适配而来。
+type UserSource interface {
+	ListUsers(ctx context.Context, offset, limit int) ([]*UserView, int, error)
+}
+
+// AuthzSource 由 internal/authz.Service 适配而来。
+type AuthzSource interface {
+	Stats(ctx context.Context) (*AuthzStats, error)
 }
 
 // PluginDigest 反映功能开关的当前取值。
@@ -228,6 +285,8 @@ type Sources struct {
 	Tasks   TaskSource
 	Monitor MonitorSource
 	Audit   AuditSource
+	Users   UserSource
+	Authz   AuthzSource
 }
 
 // AgentSource 由 internal/agent.Service 满足。

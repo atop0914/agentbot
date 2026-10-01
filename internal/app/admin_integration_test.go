@@ -1,7 +1,6 @@
 package app
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -44,13 +43,9 @@ type adminSnapshot struct {
 }
 
 func TestAdminConfigEndpoint(t *testing.T) {
-	ts := newTestServer(t)
-	defer ts.Close()
+	env := newTestEnv(t)
 
-	resp, err := http.Get(ts.URL + "/api/v1/admin/config")
-	if err != nil {
-		t.Fatalf("GET /api/v1/admin/config: %v", err)
-	}
+	resp := env.do(http.MethodGet, "/api/v1/admin/config", "")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
@@ -77,26 +72,17 @@ func TestAdminConfigEndpoint(t *testing.T) {
 }
 
 func TestAdminConfigUpdateRoundTrips(t *testing.T) {
-	ts := newTestServer(t)
-	defer ts.Close()
+	env := newTestEnv(t)
 
 	body := `{"title":"AgentBot 运维台","feature_flags":{"show_audit":true,"user_admin":true}}`
-	req, _ := http.NewRequest(http.MethodPut, ts.URL+"/api/v1/admin/config", bytes.NewBufferString(body))
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("PUT /api/v1/admin/config: %v", err)
-	}
+	resp := env.do(http.MethodPut, "/api/v1/admin/config", body)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
 
 	// 读回确认真正落库（而非只回显请求体）
-	resp2, err := http.Get(ts.URL + "/api/v1/admin/config")
-	if err != nil {
-		t.Fatalf("GET after update: %v", err)
-	}
+	resp2 := env.do(http.MethodGet, "/api/v1/admin/config", "")
 	defer resp2.Body.Close()
 	var cfg struct {
 		Title        string          `json:"title"`
@@ -114,14 +100,9 @@ func TestAdminConfigUpdateRoundTrips(t *testing.T) {
 }
 
 func TestAdminConfigRejectsEmptyTitle(t *testing.T) {
-	ts := newTestServer(t)
-	defer ts.Close()
+	env := newTestEnv(t)
 
-	req, _ := http.NewRequest(http.MethodPut, ts.URL+"/api/v1/admin/config", bytes.NewBufferString(`{"title":"   "}`))
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("PUT /api/v1/admin/config: %v", err)
-	}
+	resp := env.do(http.MethodPut, "/api/v1/admin/config", `{"title":"   "}`)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", resp.StatusCode)
@@ -129,14 +110,10 @@ func TestAdminConfigRejectsEmptyTitle(t *testing.T) {
 }
 
 func TestAdminStaticStatusPlaceholder(t *testing.T) {
-	ts := newTestServer(t)
-	defer ts.Close()
+	env := newTestEnv(t)
 
 	// 前端构建产物在本仓库中并不存在，接口仍须可用。
-	resp, err := http.Get(ts.URL + "/api/v1/admin/static")
-	if err != nil {
-		t.Fatalf("GET /api/v1/admin/static: %v", err)
-	}
+	resp := env.do(http.MethodGet, "/api/v1/admin/static", "")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
@@ -159,10 +136,7 @@ func TestAdminStaticStatusPlaceholder(t *testing.T) {
 	}
 
 	// 控制台入口必须始终可达：产物缺失时返回占位页而非 404。
-	consoleResp, err := http.Get(ts.URL + "/admin/")
-	if err != nil {
-		t.Fatalf("GET /admin/: %v", err)
-	}
+	consoleResp := env.do(http.MethodGet, "/admin/", "")
 	defer consoleResp.Body.Close()
 	if consoleResp.StatusCode != http.StatusOK {
 		t.Errorf("GET /admin/ status = %d, want 200", consoleResp.StatusCode)
@@ -170,17 +144,13 @@ func TestAdminStaticStatusPlaceholder(t *testing.T) {
 }
 
 func TestAdminSnapshotAggregatesLiveModules(t *testing.T) {
-	ts := newTestServer(t)
-	defer ts.Close()
+	env := newTestEnv(t)
 
 	// 1. 创建两个 Agent
 	agentIDs := make([]string, 0, 2)
 	for i := 0; i < 2; i++ {
 		body := fmt.Sprintf(`{"name":"admin-agent-%d","description":"d"}`, i)
-		resp, err := http.Post(ts.URL+"/api/v1/agents", "application/json", bytes.NewBufferString(body))
-		if err != nil {
-			t.Fatalf("POST /api/v1/agents: %v", err)
-		}
+		resp := env.do(http.MethodPost, "/api/v1/agents", body)
 		var created struct {
 			ID string `json:"id"`
 		}
@@ -193,10 +163,7 @@ func TestAdminSnapshotAggregatesLiveModules(t *testing.T) {
 	}
 
 	// 2. 启动其中一个，制造 running/idle 的状态分布
-	startResp, err := http.Post(ts.URL+"/api/v1/agents/"+agentIDs[0]+"/start", "application/json", nil)
-	if err != nil {
-		t.Fatalf("POST start: %v", err)
-	}
+	startResp := env.do(http.MethodPost, "/api/v1/agents/"+agentIDs[0]+"/start", "")
 	startResp.Body.Close()
 	if startResp.StatusCode != http.StatusOK && startResp.StatusCode != http.StatusNoContent {
 		t.Fatalf("start status = %d", startResp.StatusCode)
@@ -204,25 +171,16 @@ func TestAdminSnapshotAggregatesLiveModules(t *testing.T) {
 
 	// 3. 创建一个任务
 	taskBody := fmt.Sprintf(`{"agent_id":%q,"goal":"admin snapshot task"}`, agentIDs[0])
-	taskResp, err := http.Post(ts.URL+"/api/v1/tasks", "application/json", bytes.NewBufferString(taskBody))
-	if err != nil {
-		t.Fatalf("POST /api/v1/tasks: %v", err)
-	}
+	taskResp := env.do(http.MethodPost, "/api/v1/tasks", taskBody)
 	taskResp.Body.Close()
 
 	// 4. 写一条审计事件
 	auditBody := `{"action":"agent.created","actor":"admin","actor_type":"user","resource":"agent"}`
-	auditResp, err := http.Post(ts.URL+"/api/v1/audit/events", "application/json", bytes.NewBufferString(auditBody))
-	if err != nil {
-		t.Fatalf("POST /api/v1/audit/events: %v", err)
-	}
+	auditResp := env.do(http.MethodPost, "/api/v1/audit/events", auditBody)
 	auditResp.Body.Close()
 
 	// 5. 拉取聚合视图
-	resp, err := http.Get(ts.URL + "/api/v1/admin/snapshot")
-	if err != nil {
-		t.Fatalf("GET /api/v1/admin/snapshot: %v", err)
-	}
+	resp := env.do(http.MethodGet, "/api/v1/admin/snapshot", "")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
@@ -259,14 +217,10 @@ func TestAdminSnapshotAggregatesLiveModules(t *testing.T) {
 }
 
 func TestAdminSnapshotSectionFilterAndValidation(t *testing.T) {
-	ts := newTestServer(t)
-	defer ts.Close()
+	env := newTestEnv(t)
 
 	// 只取 plugins 分区：不应包含概览或数据分区
-	resp, err := http.Get(ts.URL + "/api/v1/admin/snapshot?sections=plugins")
-	if err != nil {
-		t.Fatalf("GET snapshot?sections=plugins: %v", err)
-	}
+	resp := env.do(http.MethodGet, "/api/v1/admin/snapshot?sections=plugins", "")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
@@ -285,20 +239,14 @@ func TestAdminSnapshotSectionFilterAndValidation(t *testing.T) {
 	}
 
 	// 未知分区 → 400
-	badResp, err := http.Get(ts.URL + "/api/v1/admin/snapshot?sections=nope")
-	if err != nil {
-		t.Fatalf("GET snapshot?sections=nope: %v", err)
-	}
+	badResp := env.do(http.MethodGet, "/api/v1/admin/snapshot?sections=nope", "")
 	defer badResp.Body.Close()
 	if badResp.StatusCode != http.StatusBadRequest {
 		t.Errorf("unknown section status = %d, want 400", badResp.StatusCode)
 	}
 
 	// 非法 recent_limit → 400
-	badLimit, err := http.Get(ts.URL + "/api/v1/admin/snapshot?recent_limit=abc")
-	if err != nil {
-		t.Fatalf("GET snapshot?recent_limit=abc: %v", err)
-	}
+	badLimit := env.do(http.MethodGet, "/api/v1/admin/snapshot?recent_limit=abc", "")
 	defer badLimit.Body.Close()
 	if badLimit.StatusCode != http.StatusBadRequest {
 		t.Errorf("bad recent_limit status = %d, want 400", badLimit.StatusCode)
@@ -306,22 +254,15 @@ func TestAdminSnapshotSectionFilterAndValidation(t *testing.T) {
 }
 
 func TestAdminSnapshotRecentLimitTruncates(t *testing.T) {
-	ts := newTestServer(t)
-	defer ts.Close()
+	env := newTestEnv(t)
 
 	for i := 0; i < 3; i++ {
 		body := fmt.Sprintf(`{"action":"agent.created","actor":"u%d","actor_type":"user","resource":"agent"}`, i)
-		resp, err := http.Post(ts.URL+"/api/v1/audit/events", "application/json", bytes.NewBufferString(body))
-		if err != nil {
-			t.Fatalf("POST audit event: %v", err)
-		}
+		resp := env.do(http.MethodPost, "/api/v1/audit/events", body)
 		resp.Body.Close()
 	}
 
-	resp, err := http.Get(ts.URL + "/api/v1/admin/snapshot?sections=audit&recent_limit=2")
-	if err != nil {
-		t.Fatalf("GET snapshot: %v", err)
-	}
+	resp := env.do(http.MethodGet, "/api/v1/admin/snapshot?sections=audit&recent_limit=2", "")
 	defer resp.Body.Close()
 
 	var snap struct {
@@ -351,14 +292,10 @@ func TestAdminSnapshotRecentLimitTruncates(t *testing.T) {
 }
 
 func TestAdminStaticConsoleIsReachableWithoutBuildArtifacts(t *testing.T) {
-	ts := newTestServer(t)
-	defer ts.Close()
+	env := newTestEnv(t)
 
 	// 构建产物不存在时，控制台入口返回占位页而不是 500/404。
-	resp, err := http.Get(ts.URL + "/admin/anything")
-	if err != nil {
-		t.Fatalf("GET /admin/anything: %v", err)
-	}
+	resp := env.do(http.MethodGet, "/admin/anything", "")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want 200 placeholder", resp.StatusCode)

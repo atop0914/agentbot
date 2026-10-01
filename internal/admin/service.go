@@ -208,6 +208,15 @@ func (s *service) Snapshot(ctx context.Context, query SnapshotQuery) (*Snapshot,
 		}
 	}
 
+	if q.Includes(SectionUsers) {
+		digest, err := s.buildUserDigest(ctx, q.RecentLimit)
+		if err != nil {
+			snap.Errors[string(SectionUsers)] = err.Error()
+		} else {
+			snap.Users = digest
+		}
+	}
+
 	if q.Includes(SectionPlugins) {
 		snap.Plugins = &PluginDigest{
 			Enabled:  FlagNames(cfg.FeatureFlags, true),
@@ -287,6 +296,86 @@ func (s *service) fetchAuditRecent(ctx context.Context, since *time.Time, limit 
 		return nil, fmt.Errorf("admin: audit source is not configured")
 	}
 	return s.sources.Audit.Query(ctx, since, limit)
+}
+
+// buildUserDigest 汇总用户分布与授权链统计。
+//
+// 用户列表按当前页拉取（默认取一页足够后台首屏展示），授权链统计则来自 authz，
+// 两者互相独立：authz 不可用时 users 分区仍然能展示用户计数，只是 authz 字段缺失。
+func (s *service) buildUserDigest(ctx context.Context, recentLimit int) (*UserDigest, error) {
+	if s.sources.Users == nil {
+		return nil, fmt.Errorf("admin: user source is not configured")
+	}
+	users, total, err := s.sources.Users.ListUsers(ctx, 0, overviewPageSize)
+	if err != nil {
+		return nil, err
+	}
+
+	digest := &UserDigest{
+		Total:      total,
+		ByStatus:   make(map[string]int),
+		ByRole:     make(map[string]int),
+		ByProvider: make(map[string]int),
+		Recent:     make([]UserSummary, 0, recentLimit),
+	}
+
+	// 最近 = 创建时间倒序；时间相同按 ID 倒序，保证输出稳定。
+	sorted := make([]*UserView, 0, len(users))
+	for _, u := range users {
+		if u == nil {
+			continue
+		}
+		status := u.Status
+		if status == "" {
+			status = "unknown"
+		}
+		digest.ByStatus[status]++
+
+		roleName := u.Role
+		if roleName == "" {
+			roleName = "unknown"
+		}
+		digest.ByRole[roleName]++
+
+		provider := u.Provider
+		if provider == "" {
+			provider = "unknown"
+		}
+		digest.ByProvider[provider]++
+
+		sorted = append(sorted, u)
+	}
+	sort.Slice(sorted, func(i, j int) bool {
+		if !sorted[i].CreatedAt.Equal(sorted[j].CreatedAt) {
+			return sorted[i].CreatedAt.After(sorted[j].CreatedAt)
+		}
+		return sorted[i].ID > sorted[j].ID
+	})
+	for i, u := range sorted {
+		if i >= recentLimit {
+			break
+		}
+		digest.Recent = append(digest.Recent, UserSummary{
+			ID:        u.ID,
+			Username:  u.Username,
+			Email:     u.Email,
+			Status:    u.Status,
+			Role:      u.Role,
+			Provider:  u.Provider,
+			CreatedAt: u.CreatedAt,
+		})
+	}
+
+	if s.sources.Authz != nil {
+		stats, err := s.sources.Authz.Stats(ctx)
+		if err != nil {
+			// 授权链统计失败不影响用户分布，但要把原因暴露出来。
+			return digest, fmt.Errorf("admin: authorization stats unavailable: %w", err)
+		}
+		digest.Authz = stats
+	}
+
+	return digest, nil
 }
 
 // buildOverview 汇总各模块计数。
