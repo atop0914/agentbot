@@ -133,30 +133,117 @@ func DefaultRouteTable() *RouteTable {
 		{Method: http.MethodPost, Pattern: "/api/v1/tasks", Action: role.PermTaskCreate},
 		{Method: http.MethodDelete, Pattern: "/api/v1/tasks/", Action: role.PermTaskCancel},
 
+		// Cloud environment 的环境子资源（创建/销毁/执行）
+		{Method: http.MethodDelete, Pattern: "/api/v1/environments/", Action: role.PermEnvDestroy},
+
 		// Terminal / filesystem（Agent 能力面里最危险的两块）
-		{Method: http.MethodGet, Pattern: "/api/v1/terminal", Action: role.PermEnvRead},
-		{Method: http.MethodPost, Pattern: "/api/v1/terminal/", Action: role.PermEnvExecute},
-		{Method: http.MethodGet, Pattern: "/api/v1/filesystem", Action: role.PermFileRead},
+		//
+		// 注意路径是复数 /terminals 与 /filesystem/<op>，与 handler 注册的前缀
+		// 一致；写错过一次（单数 /terminal）会导致整组路由落进默认拒绝。
+		{Method: http.MethodGet, Pattern: "/api/v1/terminals", Action: role.PermEnvRead},
+		{Method: http.MethodPost, Pattern: "/api/v1/terminals", Action: role.PermEnvExecute},
+		{Method: http.MethodGet, Pattern: "/api/v1/terminals/", Action: role.PermEnvRead},
+		{Method: http.MethodPost, Pattern: "/api/v1/terminals/", Action: role.PermEnvExecute},
+		{Method: http.MethodDelete, Pattern: "/api/v1/terminals/", Action: role.PermEnvDestroy},
+		{Method: http.MethodGet, Pattern: "/api/v1/filesystem/", Action: role.PermFileRead},
 		{Method: http.MethodPost, Pattern: "/api/v1/filesystem/", Action: role.PermFileWrite},
 		{Method: http.MethodDelete, Pattern: "/api/v1/filesystem/", Action: role.PermFileDelete},
 
 		// Browser / memory
 		{Method: http.MethodGet, Pattern: "/api/v1/browser", Action: role.PermBrowserUse},
 		{Method: http.MethodPost, Pattern: "/api/v1/browser/", Action: role.PermBrowserUse},
+		{Method: http.MethodGet, Pattern: "/api/v1/browsers", Action: role.PermBrowserUse},
+		{Method: http.MethodPost, Pattern: "/api/v1/browsers", Action: role.PermBrowserUse},
+		{Method: http.MethodGet, Pattern: "/api/v1/browsers/", Action: role.PermBrowserUse},
+		{Method: http.MethodDelete, Pattern: "/api/v1/browsers/", Action: role.PermBrowserUse},
 		{Method: http.MethodGet, Pattern: "/api/v1/memory", Action: role.PermMemoryRead},
 		{Method: http.MethodPost, Pattern: "/api/v1/memory", Action: role.PermMemoryWrite},
+		{Method: http.MethodGet, Pattern: "/api/v1/memory/", Action: role.PermMemoryRead},
+		{Method: http.MethodPost, Pattern: "/api/v1/memory/", Action: role.PermMemoryWrite},
+		{Method: http.MethodDelete, Pattern: "/api/v1/memory/", Action: role.PermMemoryWrite},
+
+		// 应用适配器：连接外部系统（邮件/日历），按写权限对待。
+		{Method: http.MethodGet, Pattern: "/api/v1/adapters", Action: role.PermMemoryRead},
+		{Method: http.MethodGet, Pattern: "/api/v1/adapters/", Action: role.PermMemoryRead},
+		{Method: http.MethodPost, Pattern: "/api/v1/adapters", Action: role.PermMemoryWrite},
+		{Method: http.MethodPost, Pattern: "/api/v1/adapters/", Action: role.PermMemoryWrite},
+		{Method: http.MethodDelete, Pattern: "/api/v1/adapters/", Action: role.PermMemoryWrite},
+
+		// 任务拆解：只读推理，不落盘。
+		{Method: http.MethodPost, Pattern: "/api/v1/decompose", Action: role.PermTaskCreate},
+
+		// 多 Agent 通信
+		{Method: http.MethodPost, Pattern: "/api/v1/messages", Action: role.PermMessageSend},
+		{Method: http.MethodPost, Pattern: "/api/v1/messages/", Action: role.PermMessageSend},
+		{Method: http.MethodGet, Pattern: "/api/v1/messages/", Action: role.PermMessageRead},
+		{Method: http.MethodGet, Pattern: "/api/v1/groups", Action: role.PermMessageRead},
+		{Method: http.MethodPost, Pattern: "/api/v1/groups", Action: role.PermMessageBroadcast},
+		{Method: http.MethodPost, Pattern: "/api/v1/groups/", Action: role.PermMessageBroadcast},
+		{Method: http.MethodGet, Pattern: "/api/v1/groups/", Action: role.PermMessageRead},
+
+		// 工作流录制 → 模板生成
+		{Method: http.MethodPost, Pattern: "/api/v1/recordings/start", Action: role.PermMemoryWrite},
+		{Method: http.MethodPost, Pattern: "/api/v1/recordings/step", Action: role.PermMemoryWrite},
+		{Method: http.MethodPost, Pattern: "/api/v1/recordings/stop", Action: role.PermMemoryWrite},
+
+		// 模板与模板市场
+		{Method: http.MethodGet, Pattern: "/api/v1/templates", Action: role.PermMemoryRead},
+		{Method: http.MethodGet, Pattern: "/api/v1/templates/", Action: role.PermMemoryRead},
+		{Method: http.MethodPost, Pattern: "/api/v1/templates", Action: role.PermMemoryWrite},
+		{Method: http.MethodPost, Pattern: "/api/v1/templates/", Action: role.PermMemoryWrite},
+		{Method: http.MethodDelete, Pattern: "/api/v1/templates/", Action: role.PermMemoryWrite},
+		{Method: http.MethodGet, Pattern: "/api/v1/marketplace", Action: role.PermMemoryRead},
+		{Method: http.MethodGet, Pattern: "/api/v1/marketplace/", Action: role.PermMemoryRead},
+		{Method: http.MethodPost, Pattern: "/api/v1/marketplace/", Action: role.PermMemoryWrite},
+
+		// Agent 健康监控：观测面只读。
+		{Method: http.MethodGet, Pattern: "/api/v1/monitor/", Action: role.PermAgentRead},
+
+		// 审计日志：读审计需要 role:manage（属敏感数据），purge 需要额外权限。
+		{Method: http.MethodGet, Pattern: "/api/v1/audit/", Action: role.PermRoleManage},
+		{Method: http.MethodPost, Pattern: "/api/v1/audit/purge", Action: role.PermRoleManage},
+
+		// 角色与权限矩阵（元权限）
+		{Method: http.MethodGet, Pattern: "/api/v1/roles", Action: role.PermRoleManage},
+		{Method: http.MethodGet, Pattern: "/api/v1/roles/", Action: role.PermRoleManage},
+		{Method: http.MethodPost, Pattern: "/api/v1/roles", Action: role.PermRoleManage},
+		{Method: http.MethodPut, Pattern: "/api/v1/roles/", Action: role.PermRoleManage},
+		{Method: http.MethodDelete, Pattern: "/api/v1/roles/", Action: role.PermRoleManage},
+		{Method: http.MethodGet, Pattern: "/api/v1/role-assignments/", Action: role.PermRoleManage},
+		{Method: http.MethodGet, Pattern: "/api/v1/permissions", Action: role.PermRoleManage},
 
 		// 管理后台：用户与权限管理属于 user_admin（默认关闭的功能开关）
-		{Method: http.MethodGet, Pattern: "/api/v1/users", Action: role.PermRoleManage},
-		{Method: http.MethodGet, Pattern: "/api/v1/users/", Action: role.PermRoleManage},
-		{Method: http.MethodPost, Pattern: "/api/v1/users/", Action: role.PermRoleManage, TargetType: "user"},
-		{Method: http.MethodPut, Pattern: "/api/v1/users/", Action: role.PermRoleManage, TargetType: "user"},
-		{Method: http.MethodDelete, Pattern: "/api/v1/users/", Action: role.PermRoleManage, TargetType: "user"},
+		//
+		// 注意：具体权限（user:read 等）与 role:manage 有重叠语义，这里刻意用
+		// user:* 系列，保证「能看用户」不需要「能改角色」。
+		{Method: http.MethodGet, Pattern: "/api/v1/users", Action: role.PermUserRead},
+		{Method: http.MethodGet, Pattern: "/api/v1/users/", Action: role.PermUserRead, TargetType: "user"},
+		{Method: http.MethodPut, Pattern: "/api/v1/users/", Action: role.PermUserUpdate, TargetType: "user"},
+		{Method: http.MethodDelete, Pattern: "/api/v1/users/", Action: role.PermUserDelete, TargetType: "user"},
+		{Method: http.MethodGet, Pattern: "/api/v1/authorizations", Action: role.PermRoleManage},
 		{Method: http.MethodPost, Pattern: "/api/v1/authorizations", Action: role.PermRoleAssign},
 		{Method: http.MethodDelete, Pattern: "/api/v1/authorizations", Action: role.PermRoleRevoke},
 		{Method: http.MethodGet, Pattern: "/api/v1/authorizations/me", Action: "", Public: true},
 		{Method: http.MethodGet, Pattern: "/api/v1/authorizations/", Action: role.PermRoleManage},
+		{Method: http.MethodGet, Pattern: "/api/v1/authorization-audit", Action: role.PermRoleManage},
+		{Method: http.MethodGet, Pattern: "/api/v1/authorization-stats", Action: role.PermRoleManage},
 		{Method: http.MethodGet, Pattern: "/api/v1/permission-routes", Action: role.PermRoleManage},
+
+		// 健康检查与 CORS 预检：无需身份，且不能因为中间件而变成 403。
+		{Method: http.MethodGet, Pattern: "/health", Public: true},
+		{Method: http.MethodHead, Pattern: "/health", Public: true},
+		{Method: http.MethodOptions, Pattern: "/", Public: true},
+
+		// 认证相关路由自身不需要权限（登录/注册/刷新/登出）。
+		{Pattern: "/api/v1/auth/", Public: true},
+
+		// WebSocket 升级：以 query token 认证，权限在连接建立时校验。
+		{Pattern: "/api/v1/ws", Public: true},
+
+		// 管理后台聚合视图与静态资源（控制台自身的读取能力）。
+		{Pattern: "/api/v1/admin/", Action: role.PermRoleManage},
+		{Method: http.MethodGet, Pattern: "/admin", Public: true},
+		{Method: http.MethodGet, Pattern: "/admin/", Public: true},
 	})
 }
 
