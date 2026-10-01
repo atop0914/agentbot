@@ -318,3 +318,31 @@ func TestAssignmentExpired(t *testing.T) {
 		t.Error("assignment without expiry must never expire")
 	}
 }
+
+func TestRouteTableGatesUserSubResources(t *testing.T) {
+	table := authz.DefaultRouteTable()
+
+	cases := []struct {
+		method string
+		path   string
+		action role.Permission
+	}{
+		// 读用户详情不应被 status 子资源的规则抢走。
+		{http.MethodGet, "/api/v1/users/u1", role.PermUserRead},
+		// 停用账号需要独立权限，不能只靠 user:update。
+		{http.MethodPut, "/api/v1/users/u1/status", role.PermUserActivate},
+		// 改别人的角色要走 role:assign / role:revoke，而不是 user:update。
+		{http.MethodPost, "/api/v1/users/u1/roles", role.PermRoleAssign},
+		{http.MethodDelete, "/api/v1/users/u1/roles", role.PermRoleRevoke},
+	}
+	for _, tc := range cases {
+		rule, ok := table.Lookup(tc.method, tc.path)
+		if !ok {
+			t.Errorf("%s %s: no rule registered", tc.method, tc.path)
+			continue
+		}
+		if rule.Action != tc.action {
+			t.Errorf("%s %s: action = %s, want %s", tc.method, tc.path, rule.Action, tc.action)
+		}
+	}
+}

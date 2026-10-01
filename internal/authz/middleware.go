@@ -33,6 +33,11 @@ type RouteRule struct {
 	TargetType string
 	// Public 为 true 表示无需权限（如查询自己的授权信息）。
 	Public bool
+	// Suffix 为 true 时把 Pattern 当作**路径后缀**匹配。
+	//
+	// 用于 /api/v1/users/{id}/status 这类「中间带 ID、尾部是固定子资源名」的
+	// 路由：前缀匹配无法表达，因为 ID 段长度不定。
+	Suffix bool
 }
 
 // RouteTable 是路由权限表的查询结构。
@@ -64,6 +69,26 @@ func (t *RouteTable) Lookup(method, path string) (RouteRule, bool) {
 			return r, true
 		}
 	}
+	// 再后缀（最长的后缀优先）。必须在通配前缀之前判定，否则
+	// /api/v1/users/{id}/status 会被 /api/v1/users/ 前缀规则抢走。
+	var bestSuffix RouteRule
+	bestSuffixLen := -1
+	for _, r := range t.rules {
+		if !r.Suffix {
+			continue
+		}
+		if !strings.HasSuffix(path, r.Pattern) || !methodMatches(r.Method, method) {
+			continue
+		}
+		if len(r.Pattern) > bestSuffixLen {
+			bestSuffix = r
+			bestSuffixLen = len(r.Pattern)
+		}
+	}
+	if bestSuffixLen >= 0 {
+		return bestSuffix, true
+	}
+
 	// 再前缀（最长的前缀优先，保证 /api/v1/users/x/roles 不会被 /api/v1/users/ 抢走）
 	var best RouteRule
 	bestLen := -1
@@ -231,6 +256,15 @@ func DefaultRouteTable() *RouteTable {
 		{Method: http.MethodGet, Pattern: "/api/v1/users/", Action: role.PermUserRead, TargetType: "user"},
 		{Method: http.MethodPut, Pattern: "/api/v1/users/", Action: role.PermUserUpdate, TargetType: "user"},
 		{Method: http.MethodDelete, Pattern: "/api/v1/users/", Action: role.PermUserDelete, TargetType: "user"},
+		// 用户子资源：启用/停用比「改用户」更敏感，单列权限，避免拿到
+		// user:update 就能停用他人账号。角色分配读写同样单列。
+		// 注意：这些规则必须带方法，否则会覆盖上面的 GET 详情规则。
+		{Method: http.MethodGet, Pattern: "/status", Suffix: true, Action: role.PermUserRead, TargetType: "user"},
+		{Method: http.MethodPut, Pattern: "/status", Suffix: true, Action: role.PermUserActivate, TargetType: "user"},
+		{Method: http.MethodPost, Pattern: "/status", Suffix: true, Action: role.PermUserActivate, TargetType: "user"},
+		{Method: http.MethodGet, Pattern: "/roles", Suffix: true, Action: role.PermUserRead, TargetType: "user"},
+		{Method: http.MethodPost, Pattern: "/roles", Suffix: true, Action: role.PermRoleAssign, TargetType: "user"},
+		{Method: http.MethodDelete, Pattern: "/roles", Suffix: true, Action: role.PermRoleRevoke, TargetType: "user"},
 		{Method: http.MethodGet, Pattern: "/api/v1/authorizations", Action: role.PermRoleManage},
 		{Method: http.MethodPost, Pattern: "/api/v1/authorizations", Action: role.PermRoleAssign},
 		{Method: http.MethodDelete, Pattern: "/api/v1/authorizations", Action: role.PermRoleRevoke},
@@ -350,8 +384,21 @@ func (m *Middleware) targetFromRequest(rule RouteRule, r *http.Request) Target {
 // 对 /api/v1/users/{id}/roles 这类路径，{id} 是 id 之后紧跟的一段，
 // 而不是最后一段，因此需要按 pattern 的段数裁剪。
 func targetIDFromPath(pattern, path string) string {
-	if pattern == "" || !strings.HasSuffix(pattern, "/") {
+	if pattern == "" {
 		return ""
+	}
+	if !strings.HasSuffix(pattern, "/") {
+		// 后缀规则：ID 是后缀之前的那一段。
+		// 例：pattern="/status", path="/api/v1/users/u1/status" -> "u1"
+		trimmed := strings.TrimSuffix(path, pattern)
+		trimmed = strings.Trim(trimmed, "/")
+		if trimmed == "" {
+			return ""
+		}
+		if idx := strings.LastIndex(trimmed, "/"); idx >= 0 {
+			return trimmed[idx+1:]
+		}
+		return trimmed
 	}
 	rest := strings.TrimPrefix(path, pattern)
 	rest = strings.Trim(rest, "/")
