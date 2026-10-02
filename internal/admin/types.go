@@ -89,6 +89,68 @@ type AgentBreakdown struct {
 	Total    int            `json:"total"`
 	ByState  map[string]int `json:"by_state"`
 	Recently []AgentSummary `json:"recently,omitempty"`
+	// ===== Day 24：监控时间序列摘要 + 告警处置进度 =====
+	//
+	// Monitoring 是集群级监控摘要（时间序列 + 处置进度）。
+	// 独立于 Total/ByState：监控数据不可用时这里为 nil，
+	// 而 Agent 状态分布仍照常渲染（分区内再降级）。
+	Monitoring *MonitorSummary `json:"monitoring,omitempty"`
+}
+
+// MonitorSummary 是控制台 agents 分区需要的监控摘要。
+type MonitorSummary struct {
+	// Series 是按 Agent 的最近窗口指标摘要（含均值/峰值与样本量）。
+	Series []AgentSeriesSummary `json:"series,omitempty"`
+	// Dispositions 是告警处置进度。
+	Dispositions *DispositionProgress `json:"dispositions,omitempty"`
+	// SeriesWindow 是时间序列摘要所用的窗口（回显给前端）。
+	SeriesWindow time.Duration `json:"series_window"`
+	// GeneratedAt 是摘要生成时刻。
+	GeneratedAt time.Time `json:"generated_at"`
+	// Degraded 为 true 表示时间序列或处置进度至少有一项取数失败。
+	Degraded bool `json:"degraded,omitempty"`
+	// Errors 记录降级原因（按子项名索引）。
+	Errors map[string]string `json:"errors,omitempty"`
+}
+
+// AgentSeriesSummary 是单个 Agent 的时间序列摘要。
+type AgentSeriesSummary struct {
+	AgentID    string  `json:"agent_id"`
+	Samples    int     `json:"samples"`
+	CPUAvg     float64 `json:"cpu_avg"`
+	CPUPeak    float64 `json:"cpu_peak"`
+	MemoryAvg  float64 `json:"memory_avg"`
+	MemoryPeak float64 `json:"memory_peak"`
+	// TaskSuccessRate 为 -1 表示窗口内没有任务数据。
+	TaskSuccessRate float64 `json:"task_success_rate"`
+	TaskCount       int     `json:"task_count"`
+	// Empty 为 true 表示窗口内没有任何采样。
+	Empty bool `json:"empty"`
+}
+
+// DispositionProgress 是告警处置进度摘要（admin 视图）。
+type DispositionProgress struct {
+	Open           int `json:"open"`
+	Acknowledged   int `json:"acknowledged"`
+	Resolved       int `json:"resolved"`
+	Unacknowledged int `json:"unacknowledged"`
+	// AvgTimeToAckSeconds / AvgTimeToResolveSeconds 为运维响应时长指标。
+	AvgTimeToAckSeconds     float64            `json:"avg_time_to_ack_seconds"`
+	AvgTimeToResolveSeconds float64            `json:"avg_time_to_resolve_seconds"`
+	BySeverity              map[string]int     `json:"by_severity"`
+	Recent                  []DispositionBrief `json:"recent,omitempty"`
+}
+
+// DispositionBrief 是处置记录的轻量视图。
+type DispositionBrief struct {
+	AlertID  string    `json:"alert_id"`
+	AgentID  string    `json:"agent_id"`
+	Action   string    `json:"action"`
+	From     string    `json:"from"`
+	To       string    `json:"to"`
+	Operator string    `json:"operator"`
+	Note     string    `json:"note,omitempty"`
+	At       time.Time `json:"at"`
 }
 
 // AgentSummary 是 Agent 的轻量视图，只暴露控制台列表需要的字段。
@@ -226,6 +288,8 @@ type SnapshotQuery struct {
 const (
 	DefaultRecentLimit = 10
 	MaxRecentLimit     = 200
+	// DefaultMonitorWindow 是 agents 分区监控摘要的默认时间窗。
+	DefaultMonitorWindow = 30 * time.Minute
 )
 
 // Normalize 填充默认值并把 RecentLimit 收敛到合法区间。
@@ -315,9 +379,15 @@ type TaskView struct {
 	CreatedAt time.Time
 }
 
-// MonitorSource 提供告警查询，由 internal/monitor.Service 适配。
+// MonitorSource 提供告警查询与监控摘要，由 internal/monitor.Service 适配。
 type MonitorSource interface {
 	ListAlerts(ctx context.Context, agentID string, resolved bool) ([]*AlertView, error)
+	// Summarize 返回控制台 agents 分区需要的监控摘要：
+	// 各 Agent 的时间序列摘要 + 告警处置进度。
+	//
+	// 与 ListAlerts 分开定义：告警列表即使可用，时间序列也可能不可用，
+	// 二者需要独立降级。
+	Summarize(ctx context.Context, window time.Duration, recentLimit int) (*MonitorSummary, error)
 }
 
 // AlertView 是 admin 需要的告警字段子集。

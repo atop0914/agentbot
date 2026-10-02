@@ -181,14 +181,17 @@ func New() *App {
 
 	// Monitoring (agent health & alerts)
 	monitorRepo := monitor.NewMemoryRepository()
-	monitorSvc := monitor.NewService(monitorRepo)
-	monitorH := monitor.NewHandler(monitorSvc)
 
-	// Audit log (需要早于其他业务模块创建，便于后续注入打点)
+	// Audit log (需要早于监控装配：告警处置要落审计)
 	auditRepo := audit.NewMemoryRepository()
 	auditSvc := audit.NewService(auditRepo)
 	auditH := audit.NewHandler(auditSvc)
 	auditRec := audit.NewRecorder(auditSvc)
+
+	// 把告警处置接到审计：认领/解决/重开都会留下一条 agent 维度的审计事件，
+	// 明细里带处置人、备注与状态迁移边界。
+	monitorSvc := monitor.NewServiceWithRecorder(monitorRepo, monitorDispositionRecorder{rec: auditRec})
+	monitorH := monitor.NewHandler(monitorSvc)
 
 	// WebSocket
 	wsHub := websocket.NewHub(logger)

@@ -97,6 +97,94 @@ func (s adminMonitorSource) ListAlerts(ctx context.Context, agentID string, reso
 	return out, nil
 }
 
+// Summarize 把 monitor 的时间序列与处置进度转成 admin 的轻量视图。
+//
+// 两个子项独立降级：时间序列取数失败不影响处置进度，反之亦然，
+// 失败原因写入 summary.Errors 并把 Degraded 置真。
+func (s adminMonitorSource) Summarize(ctx context.Context, window time.Duration, recentLimit int) (*admin.MonitorSummary, error) {
+	if window <= 0 {
+		window = admin.DefaultMonitorWindow
+	}
+	if recentLimit <= 0 {
+		recentLimit = admin.DefaultRecentLimit
+	}
+
+	summary := &admin.MonitorSummary{
+		SeriesWindow: window,
+		GeneratedAt:  time.Now().UTC(),
+	}
+
+	// 时间序列摘要：枚举所有上报过状态的 Agent，逐个取窗口摘要。
+	statuses, err := s.svc.ListAgentStatuses(ctx)
+	if err != nil {
+		summary.Degraded = true
+		summary.Errors = map[string]string{"series": err.Error()}
+	} else {
+		series := make([]admin.AgentSeriesSummary, 0, len(statuses))
+		for _, st := range statuses {
+			if st == nil || st.AgentID == "" {
+				continue
+			}
+			ts, err := s.svc.GetTimeSeriesByDuration(ctx, st.AgentID, window)
+			if err != nil {
+				summary.Degraded = true
+				if summary.Errors == nil {
+					summary.Errors = make(map[string]string)
+				}
+				summary.Errors["series."+st.AgentID] = err.Error()
+				continue
+			}
+			series = append(series, admin.AgentSeriesSummary{
+				AgentID:         ts.AgentID,
+				Samples:         ts.SampleCount,
+				CPUAvg:          ts.CPUAvg,
+				CPUPeak:         ts.CPUPeak,
+				MemoryAvg:       ts.MemoryAvg,
+				MemoryPeak:      ts.MemoryPeak,
+				TaskSuccessRate: ts.TaskSuccessRate,
+				TaskCount:       ts.TaskCount,
+				Empty:           ts.Empty,
+			})
+		}
+		summary.Series = series
+	}
+
+	// 处置进度。
+	progress, err := s.svc.DispositionSummary(ctx, "", recentLimit)
+	if err != nil {
+		summary.Degraded = true
+		if summary.Errors == nil {
+			summary.Errors = make(map[string]string)
+		}
+		summary.Errors["dispositions"] = err.Error()
+	} else if progress != nil {
+		dp := &admin.DispositionProgress{
+			Open:                    progress.Open,
+			Acknowledged:            progress.Acknowledged,
+			Resolved:                progress.Resolved,
+			Unacknowledged:          progress.Unacknowledged,
+			AvgTimeToAckSeconds:     progress.AvgTimeToAckSeconds,
+			AvgTimeToResolveSeconds: progress.AvgTimeToResolveSeconds,
+			BySeverity:              progress.BySeverity,
+		}
+		for _, d := range progress.Recent {
+			dp.Recent = append(dp.Recent, admin.DispositionBrief{
+				AlertID:  d.AlertID,
+				AgentID:  d.AgentID,
+				Action:   string(d.Action),
+				From:     string(d.From),
+				To:       string(d.To),
+				Operator: d.Operator,
+				Note:     d.Note,
+				At:       d.At,
+			})
+		}
+		summary.Dispositions = dp
+	}
+
+	return summary, nil
+}
+
 // adminAuditSource 把 audit.Service 适配为 admin.AuditSource。
 type adminAuditSource struct {
 	svc audit.Service

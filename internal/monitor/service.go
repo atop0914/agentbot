@@ -23,6 +23,9 @@ const (
 type service struct {
 	repo Repository
 
+	// recorder 是告警处置的审计落地点，可为 nil（表示不落审计）。
+	recorder DispositionRecorder
+
 	mu    sync.RWMutex
 	rules map[string]*AlertRule // key: rule ID
 	byAge map[string][]*Alert   // key: agentID，已产生的告警历史
@@ -35,6 +38,18 @@ func NewService(repo Repository) Service {
 		rules: make(map[string]*AlertRule),
 		byAge: make(map[string][]*Alert),
 	}
+}
+
+// NewServiceWithRecorder 创建监控服务，并注入告警处置的审计记录器。
+//
+// 单独开一个构造函数而不是加可选参数：既有的 NewService 调用点（含测试）
+// 不需要改动，同时装配层能显式表达「这个部署要落审计」。
+func NewServiceWithRecorder(repo Repository, recorder DispositionRecorder) Service {
+	svc := NewService(repo)
+	if s, ok := svc.(*service); ok {
+		s.recorder = recorder
+	}
+	return svc
 }
 
 func (s *service) GetAgentStatus(ctx context.Context, agentID string) (*AgentStatus, error) {

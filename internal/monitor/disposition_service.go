@@ -116,8 +116,25 @@ func (s *service) transition(ctx context.Context, alertID string, req Dispositio
 	// UpdateAlert 存的是副本；s.byAge 里的对象必须同步替换，否则
 	// ListAlerts / DispositionSummary 仍会读到过渡前的状态。
 	s.updateInPlaceLocked(alert)
+
+	// 落审计。失败不阻断：处置已经真实发生，审计失败只是留痕缺失，
+	// 详情写入返回体的 RecordError 交给上层决定是否告警。
+	recordErr := s.recordDisposition(ctx, alert, disposition)
+
 	cp := *alert
-	return &cp, nil
+	return &cp, recordErr
+}
+
+// recordDisposition 调用注入的记录器；未注入时是空操作。
+//
+// 必须在持有 s.mu 的情况下调用，保证「状态已改但记录未写」的窗口尽量小。
+func (s *service) recordDisposition(ctx context.Context, alert *Alert, disposition *AlertDisposition) error {
+	if s.recorder == nil {
+		return nil
+	}
+	cpAlert := *alert
+	cpDisp := *disposition
+	return s.recorder.RecordDisposition(ctx, &cpAlert, &cpDisp)
 }
 
 // findAlertLocked 在持有 s.mu 时按 ID 查告警，返回副本指针与所属 Agent ID。

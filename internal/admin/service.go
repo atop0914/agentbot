@@ -156,7 +156,28 @@ func (s *service) Snapshot(ctx context.Context, query SnapshotQuery) (*Snapshot,
 			agents = list
 		}
 		if q.Includes(SectionAgents) {
-			snap.Agents = buildAgentBreakdown(agents, q.RecentLimit)
+			breakdown := buildAgentBreakdown(agents, q.RecentLimit)
+			// 监控摘要是 agents 分区内的可选增强：取数失败时仅去掉这一段，
+			// 不影响 Agent 状态分布的渲染（分区内二级降级）。
+			//
+			// 错误并入 agents 键而不是新开 agents.monitoring：Snapshot.Errors
+			// 的契约是「每分区一个键」，多开子键会让控制台的分区降级判断失效。
+			// 具体哪一段降级由 Monitoring.Errors 自己说明。
+			monitoring, err := s.fetchMonitorSummary(ctx, q)
+			if err != nil {
+				breakdown.Monitoring = &MonitorSummary{
+					SeriesWindow: monitorWindowFor(q),
+					GeneratedAt:  time.Now().UTC(),
+					Degraded:     true,
+					Errors:       map[string]string{"summary": err.Error()},
+				}
+				if _, already := snap.Errors[string(SectionAgents)]; !already {
+					snap.Errors[string(SectionAgents)] = err.Error()
+				}
+			} else {
+				breakdown.Monitoring = monitoring
+			}
+			snap.Agents = breakdown
 		}
 	}
 
@@ -282,6 +303,25 @@ func (s *service) fetchAlerts(ctx context.Context) ([]*AlertView, error) {
 		return nil, fmt.Errorf("admin: monitor source is not configured")
 	}
 	return s.sources.Monitor.ListAlerts(ctx, "", false)
+}
+
+// fetchMonitorSummary 取监控摘要（时间序列 + 处置进度）。
+//
+// 窗口沿用审计窗口的语义：未显式指定时用默认 30 分钟，
+// 保证控制台首屏的「最近趋势」和其他分区的时间尺度一致。
+func (s *service) fetchMonitorSummary(ctx context.Context, q SnapshotQuery) (*MonitorSummary, error) {
+	if s.sources.Monitor == nil {
+		return nil, fmt.Errorf("admin: monitor source is not configured")
+	}
+	return s.sources.Monitor.Summarize(ctx, monitorWindowFor(q), q.RecentLimit)
+}
+
+// monitorWindowFor 解析 agents 分区监控摘要的时间窗。
+func monitorWindowFor(q SnapshotQuery) time.Duration {
+	if q.AuditWindow > 0 {
+		return q.AuditWindow
+	}
+	return DefaultMonitorWindow
 }
 
 func (s *service) fetchAuditCount(ctx context.Context, since *time.Time) (int, error) {

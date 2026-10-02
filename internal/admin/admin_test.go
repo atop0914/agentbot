@@ -49,8 +49,11 @@ func (f *fakeTaskSource) List(_ context.Context, _, _ string, _ int) ([]*TaskVie
 }
 
 type fakeMonitorSource struct {
-	items []*AlertView
-	err   error
+	items   []*AlertView
+	err     error
+	summary *MonitorSummary
+	// summaryErr 用于测试「监控摘要失败但告警列表可用」的分区内降级。
+	summaryErr error
 }
 
 func (f *fakeMonitorSource) ListAlerts(_ context.Context, _ string, _ bool) ([]*AlertView, error) {
@@ -58,6 +61,16 @@ func (f *fakeMonitorSource) ListAlerts(_ context.Context, _ string, _ bool) ([]*
 		return nil, f.err
 	}
 	return f.items, nil
+}
+
+func (f *fakeMonitorSource) Summarize(_ context.Context, window time.Duration, _ int) (*MonitorSummary, error) {
+	if f.summaryErr != nil {
+		return nil, f.summaryErr
+	}
+	if f.summary != nil {
+		return f.summary, nil
+	}
+	return &MonitorSummary{SeriesWindow: window, GeneratedAt: time.Now().UTC()}, nil
 }
 
 type fakeAuditSource struct {
