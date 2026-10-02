@@ -265,10 +265,46 @@ func (s *service) ListAlerts(ctx context.Context, agentID string, resolved bool)
 				continue
 			}
 			cp := *a
+			// 旧数据可能只有 Resolved 布尔位，这里统一补齐 Status，
+			// 保证列表接口返回的每条告警都带合法状态。
+			cp.NormalizeStatus()
 			out = append(out, &cp)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out, nil
+}
+
+// ListAlertsByStatus 按处置状态过滤告警。status 为空时等价于 ListAlerts(_, false)。
+//
+// 之所以不改造 ListAlerts 的签名：它已被既有接口与测试依赖，
+// 而 Resolved 布尔过滤与三态过滤是两套语义，混在一起容易出错。
+func (s *service) ListAlertsByStatus(ctx context.Context, agentID string, status AlertStatus) ([]*Alert, error) {
+	if status != "" && !status.Valid() {
+		return nil, fmt.Errorf("monitor: invalid alert status %q", status)
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []*Alert
+	for id, alerts := range s.byAge {
+		if agentID != "" && id != agentID {
+			continue
+		}
+		for _, a := range alerts {
+			cp := *a
+			cp.NormalizeStatus()
+			if status != "" && cp.Status != status {
+				continue
+			}
+			out = append(out, &cp)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.After(out[j].CreatedAt)
+		}
+		return out[i].ID > out[j].ID
+	})
 	return out, nil
 }
 
@@ -283,11 +319,15 @@ func (s *service) ResolveAlert(ctx context.Context, alertID string) error {
 			if a.ID != alertID {
 				continue
 			}
+			a.NormalizeStatus()
 			if a.Resolved {
 				return fmt.Errorf("monitor: alert %s already resolved", alertID)
 			}
+			a.Status = AlertStatusResolved
 			a.Resolved = true
-			a.ResolvedAt = time.Now().UTC()
+			if a.ResolvedAt.IsZero() {
+				a.ResolvedAt = time.Now().UTC()
+			}
 			return s.repo.UpdateAlert(ctx, a)
 		}
 	}
@@ -371,6 +411,8 @@ func (s *service) evaluateLocked(agentID string, status *AgentStatus) []*Alert {
 			Value:     value,
 			Threshold: rule.Threshold,
 			CreatedAt: time.Now().UTC(),
+			// 新告警一律从 firing 开始，等待人工认领。
+			Status: AlertStatusFiring,
 		}
 		s.byAge[agentID] = append(s.byAge[agentID], alert)
 		_ = s.repo.CreateAlert(context.Background(), alert)
