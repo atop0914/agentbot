@@ -230,7 +230,20 @@ func DefaultRouteTable() *RouteTable {
 		{Method: http.MethodPost, Pattern: "/api/v1/marketplace/", Action: role.PermMemoryWrite},
 
 		// Agent 健康监控：观测面只读。
+		//
+		// 注意：/monitor/ 前缀规则覆盖不到集合路径（无尾斜杠），
+		// Day 24 新增的 /monitor/task-outcomes 与 /monitor/alert-dispositions
+		// 必须单独登记，否则落进默认拒绝。
 		{Method: http.MethodGet, Pattern: "/api/v1/monitor/", Action: role.PermAgentRead},
+		{Method: http.MethodGet, Pattern: "/api/v1/monitor/alert-dispositions", Action: role.PermAgentRead},
+		// 任务结果上报属于「写」：它是观测数据的写入面，按 agent:control 对待。
+		{Method: http.MethodPost, Pattern: "/api/v1/monitor/task-outcomes", Action: role.PermAgentControl},
+		// 告警处置改变告警状态，属于控制类操作而非只读观测。
+		// 前缀规则覆盖 /monitor/alerts/{id}/ack|resolve|reopen|dispositions，
+		// 但 POST /monitor/alerts 同时是「创建规则」与「处置」的入口，
+		// 需要方法级规则区分，故这里显式补一条 POST 规则。
+		{Method: http.MethodPost, Pattern: "/api/v1/monitor/alerts", Action: role.PermAgentControl},
+		{Method: http.MethodPost, Pattern: "/api/v1/monitor/alerts/", Action: role.PermAgentControl},
 
 		// 审计日志：读审计需要 role:manage（属敏感数据）。
 		// 写入（/audit/events）由业务模块经内部 recorder 产生，HTTP 直写同样

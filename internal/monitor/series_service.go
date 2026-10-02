@@ -37,12 +37,19 @@ func (s *service) GetTimeSeries(ctx context.Context, agentID string, start, end 
 	}
 
 	// 桶边界对齐到 BucketInterval 的整数倍。
+	//
+	// 关键：end 必须向上取整到「当前桶的结束时刻」。若向下取整，此刻刚上报的
+	// 采样（例如 12:46:30）会落在 end=12:46:00 之后而被整个丢掉，
+	// 表现为「刚上报的指标查不到」。
 	start = truncateToBucket(start)
-	end = truncateToBucket(end)
+	end = truncateToBucket(end).Add(BucketInterval)
+	if !start.Before(end) {
+		start = end.Add(-DefaultSeriesWindow)
+	}
 	totalBuckets := int(end.Sub(start)/BucketInterval) + 1
+	// 桶数上限：把窗口收窄到最近 MaxSeriesBuckets 个桶（含边界桶）。
 	if totalBuckets > MaxSeriesBuckets {
-		// 只保最近的窗口：把 start 前移到「end 往前 MaxSeriesBuckets-1 个桶」。
-		start = end.Add(-time.Duration(MaxSeriesBuckets-1) * BucketInterval)
+		start = end.Add(-time.Duration(MaxSeriesBuckets) * BucketInterval)
 		totalBuckets = MaxSeriesBuckets
 	}
 

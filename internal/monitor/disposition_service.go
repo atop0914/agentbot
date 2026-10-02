@@ -28,6 +28,9 @@ func (s *service) AcknowledgeAlert(ctx context.Context, alertID string, req Disp
 // 允许从 firing 直接跳到 resolved（问题可能自愈或被快速修复），
 // 但状态机仍会补一条 resolve 记录，不会丢处置轨迹。
 func (s *service) ResolveAlertWithDisposition(ctx context.Context, alertID string, req DispositionRequest) (*Alert, error) {
+	// 动作由服务方法决定，不依赖调用方填写：漏填时会产生「有状态迁移但无动作名」
+	// 的处置记录，在审计里表现为空动作，难以检索。
+	req.Action = AlertActionResolve
 	return s.transition(ctx, alertID, req, "", AlertStatusResolved)
 }
 
@@ -35,6 +38,7 @@ func (s *service) ResolveAlertWithDisposition(ctx context.Context, alertID strin
 //
 // 用于「问题其实没修好」或「误关」的情形；重开后会重新计入未解决告警。
 func (s *service) ReopenAlert(ctx context.Context, alertID string, req DispositionRequest) (*Alert, error) {
+	req.Action = AlertActionReopen
 	return s.transition(ctx, alertID, req, AlertStatusResolved, AlertStatusFiring)
 }
 
