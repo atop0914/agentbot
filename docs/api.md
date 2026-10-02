@@ -164,10 +164,39 @@ Agent 状态机：`idle → running ⇄ paused → stopped`，异常进入 `erro
 | POST | `/monitor/agents` | 上报状态（心跳） |
 | GET | `/monitor/agents/{id}` | 单 Agent 状态 |
 | GET | `/monitor/agents/{id}/metrics?duration=1h` | 资源采样（`aggregate=1` 返回聚合） |
-| GET/POST | `/monitor/alerts` | 告警列表 / 创建规则（`rules=1` 查看规则） |
-| POST | `/monitor/alerts/{id}/resolve` | 解决告警 |
-| DELETE | `/monitor/alerts/{id}` | 删除告警 |
+| GET | `/monitor/alerts` | 告警列表（`status=firing\|acknowledged\|resolved` 过滤，`rules=1` 查看规则） |
+| POST | `/monitor/alerts` | 创建告警规则 |
+| POST | `/monitor/alerts/{id}/ack` | 认领告警（firing → acknowledged） |
+| POST | `/monitor/alerts/{id}/resolve` | 解决告警（→ resolved） |
+| POST | `/monitor/alerts/{id}/reopen` | 重新打开告警（resolved → firing） |
+| GET | `/monitor/alerts/{id}/dispositions` | 查看该告警的处置记录（时间正序） |
+| DELETE | `/monitor/alerts/{id}` | 删除告警规则 |
 | GET | `/monitor/dashboard` | 集群总览 |
+
+### 监控时间序列（Day 24）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/monitor/series/{agentID}?duration=30m` | 按 1 分钟桶归并的时间序列 |
+| GET | `/monitor/series/{agentID}?start=…&end=…` | 显式窗口（RFC3339 或 Unix 秒） |
+| POST | `/monitor/task-outcomes` | 上报任务结果（用于计算成功率） |
+| GET | `/monitor/alert-dispositions?agent_id=&limit=` | 告警处置进度汇总 |
+
+时间序列的每个点包含资源均值与**峰值**（均值会掩盖短时尖刺）以及该桶内的
+任务成功率（无任务时为 `-1`）。窗口内没有采样的桶也会返回并标记 `empty=true`，
+前端无需自行对齐时间轴。单次查询最多返回 1440 个桶（24 小时），
+超出时自动收窄为「最近 1440 分钟」，`start` 字段反映实际起点。
+
+### 告警处置（Day 24）
+
+状态机：`firing → acknowledged → resolved`，任意状态可 `reopen` 回到 `firing`。
+每次流转都会追加一条**不可变**的处置记录（操作人 + 备注 + 状态迁移边界），
+并同步写入审计日志（动作名 `alert.acknowledged` / `alert.resolved` / `alert.reopened`，
+资源 ID 为该告警所属的 Agent）。
+
+处置人取自 JWT claims；请求体中的 `operator` 仅作为显式覆盖
+（自动化与测试用），**不接受自定义 header 自报身份**。
+审计写入失败不会让处置失败（处置已真实发生），响应中通过 `record_error` 暴露。
 
 健康分 = 资源占用（70%）+ 错误扣分（严重 15 / 一般 5）+ 活跃度。
 告警规则类型：`cpu_high`、`memory_high`、`disk_high`、`inactive`、

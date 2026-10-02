@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -70,7 +71,7 @@ func (f *fakeMonitorSource) Summarize(_ context.Context, window time.Duration, _
 	if f.summary != nil {
 		return f.summary, nil
 	}
-	return &MonitorSummary{SeriesWindow: window, GeneratedAt: time.Now().UTC()}, nil
+	return &MonitorSummary{SeriesWindow: window.String(), GeneratedAt: time.Now().UTC()}, nil
 }
 
 type fakeAuditSource struct {
@@ -486,6 +487,90 @@ func TestSnapshotDoesNotPanicWithNoSources(t *testing.T) {
 	}
 	if snap.Plugins == nil || snap.Static == nil {
 		t.Error("sections without an external source should still render")
+	}
+}
+
+// 监控摘要失败不能拖垮 agents 分区：Agent 状态分布必须照常渲染。
+//
+// 这是「分区内二级降级」的核心断言 —— 只有 Monitoring 段被标记降级，
+// Total/ByState/Recently 仍然完整。
+func TestAgentsSectionDegradesIndependentlyOfMonitoring(t *testing.T) {
+	now := baseTime()
+	src := Sources{
+		Agents: &fakeAgentSource{items: []*AgentView{
+			{ID: "a1", Name: "worker", State: "running", UpdatedAt: now},
+			{ID: "a2", Name: "idle-one", State: "idle", UpdatedAt: now.Add(-time.Hour)},
+		}},
+		Monitor: &fakeMonitorSource{summaryErr: errors.New("monitor backend down")},
+	}
+	svc := newTestService(t, src)
+
+	snap, err := svc.Snapshot(context.Background(), SnapshotQuery{Sections: []Section{SectionAgents}})
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if snap.Agents == nil {
+		t.Fatal("agents section must still be rendered when only monitoring fails")
+	}
+	if snap.Agents.Total != 2 {
+		t.Errorf("agents total = %d, want 2", snap.Agents.Total)
+	}
+	if len(snap.Agents.Recently) != 2 {
+		t.Errorf("recently = %d, want 2 (monitoring failure must not drop agents)", len(snap.Agents.Recently))
+	}
+	if snap.Agents.Monitoring == nil {
+		t.Fatal("monitoring block should be present but marked degraded")
+	}
+	if !snap.Agents.Monitoring.Degraded || len(snap.Agents.Monitoring.Errors) == 0 {
+		t.Errorf("monitoring should be flagged degraded with a reason: %+v", snap.Agents.Monitoring)
+	}
+	// 分区级 errors 仍保留「每分区一个键」的契约。
+	if _, ok := snap.Errors[string(SectionAgents)]; !ok {
+		t.Errorf("agents error entry missing from snapshot errors: %v", snap.Errors)
+	}
+	if len(snap.Errors) != 1 {
+		t.Errorf("Errors has %d entries, want 1 (one per section): %v", len(snap.Errors), snap.Errors)
+	}
+}
+
+// 监控摘要正常时必须出现在 agents 分区里。
+func TestAgentsSectionCarriesMonitoringSummary(t *testing.T) {
+	summary := &MonitorSummary{
+		SeriesWindow: "15m0s",
+		GeneratedAt:  baseTime(),
+		Series: []AgentSeriesSummary{
+			{AgentID: "a1", Samples: 12, CPUAvg: 33.5, CPUPeak: 88, TaskSuccessRate: 0.9, TaskCount: 10},
+		},
+		Dispositions: &DispositionProgress{Open: 2, Acknowledged: 1, Resolved: 5, Unacknowledged: 1},
+	}
+	src := Sources{
+		Agents:  &fakeAgentSource{items: []*AgentView{{ID: "a1", Name: "w", State: "running", UpdatedAt: baseTime()}}},
+		Monitor: &fakeMonitorSource{summary: summary},
+	}
+	svc := newTestService(t, src)
+
+	snap, err := svc.Snapshot(context.Background(), SnapshotQuery{Sections: []Section{SectionAgents}})
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if snap.Agents == nil || snap.Agents.Monitoring == nil {
+		t.Fatal("monitoring summary missing from the agents section")
+	}
+	if snap.Agents.Monitoring.SeriesWindow != "15m0s" {
+		t.Errorf("series_window = %q, want 15m0s", snap.Agents.Monitoring.SeriesWindow)
+	}
+	if len(snap.Agents.Monitoring.Series) != 1 {
+		t.Fatalf("series = %d, want 1", len(snap.Agents.Monitoring.Series))
+	}
+	if got := snap.Agents.Monitoring.Series[0].CPUPeak; got != 88 {
+		t.Errorf("cpu_peak = %v, want 88 (peaks must survive the admin round-trip)", got)
+	}
+	if snap.Agents.Monitoring.Dispositions == nil || snap.Agents.Monitoring.Dispositions.Resolved != 5 {
+		t.Errorf("disposition progress not carried through: %+v", snap.Agents.Monitoring.Dispositions)
+	}
+	// 全部取数成功时不应有任何分区错误。
+	if len(snap.Errors) != 0 {
+		t.Errorf("unexpected errors: %v", snap.Errors)
 	}
 }
 

@@ -437,4 +437,53 @@ func postJSON(t *testing.T, url, body string) {
 	doJSON(t, http.MethodPost, url, body)
 }
 
+// status= 三态过滤必须真正生效，而不是把参数吞掉返回全部。
+func TestHandler_ListAlertsByStatusFilter(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	postJSON(t, srv.URL+"/api/v1/monitor/agents", `{"agent_id":"a1","state":"running","resources":{"cpu":95}}`)
+	code, body := doJSON(t, http.MethodPost, srv.URL+"/api/v1/monitor/alerts",
+		`{"agent_id":"a1","type":"cpu_high","threshold":80}`)
+	if code != http.StatusCreated {
+		t.Fatalf("create rule: got %d", code)
+	}
+	alertID := body["alert"].(map[string]interface{})["id"].(string)
+
+	// 尚未认领：firing 里有 1 条，acknowledged / resolved 均为空。
+	for _, tc := range []struct {
+		status string
+		want   float64
+	}{
+		{string(AlertStatusFiring), 1},
+		{string(AlertStatusAcknowledged), 0},
+		{string(AlertStatusResolved), 0},
+	} {
+		code, resp := doJSON(t, http.MethodGet,
+			srv.URL+"/api/v1/monitor/alerts?agent_id=a1&status="+tc.status, "")
+		if code != http.StatusOK {
+			t.Fatalf("status=%s: got %d, want 200", tc.status, code)
+		}
+		if resp["total"].(float64) != tc.want {
+			t.Errorf("status=%s: total = %v, want %v", tc.status, resp["total"], tc.want)
+		}
+	}
+
+	// 认领后必须从 firing 移动到 acknowledged。
+	postJSON(t, srv.URL+"/api/v1/monitor/alerts/"+alertID+"/ack", `{"operator":"alice"}`)
+	_, resp := doJSON(t, http.MethodGet, srv.URL+"/api/v1/monitor/alerts?agent_id=a1&status=firing", "")
+	if resp["total"].(float64) != 0 {
+		t.Errorf("firing after ack = %v, want 0", resp["total"])
+	}
+	_, resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/monitor/alerts?agent_id=a1&status=acknowledged", "")
+	if resp["total"].(float64) != 1 {
+		t.Errorf("acknowledged after ack = %v, want 1", resp["total"])
+	}
+
+	// 非法状态必须 400，而不是静默忽略过滤条件返回全部。
+	code, _ = doJSON(t, http.MethodGet, srv.URL+"/api/v1/monitor/alerts?status=bogus", "")
+	if code != http.StatusBadRequest {
+		t.Errorf("invalid status: got %d, want 400", code)
+	}
+}
+
 var _ = time.Now

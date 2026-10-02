@@ -166,7 +166,7 @@ func (s *service) Snapshot(ctx context.Context, query SnapshotQuery) (*Snapshot,
 			monitoring, err := s.fetchMonitorSummary(ctx, q)
 			if err != nil {
 				breakdown.Monitoring = &MonitorSummary{
-					SeriesWindow: monitorWindowFor(q),
+					SeriesWindow: monitorWindowFor(q).String(),
 					GeneratedAt:  time.Now().UTC(),
 					Degraded:     true,
 					Errors:       map[string]string{"summary": err.Error()},

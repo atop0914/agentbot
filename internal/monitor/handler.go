@@ -213,6 +213,23 @@ func (h *Handler) handleAlerts(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]interface{}{"rules": rules, "total": len(rules)})
 			return
 		}
+		// status= 走三态过滤（firing/acknowledged/resolved）；
+		// 未给出时沿用 resolved 布尔过滤，兼容既有调用方。
+		if raw := r.URL.Query().Get("status"); raw != "" {
+			status := AlertStatus(raw)
+			if !status.Valid() {
+				writeErr(w, http.StatusBadRequest,
+					"invalid status: must be firing, acknowledged or resolved")
+				return
+			}
+			alerts, err := h.svc.ListAlertsByStatus(r.Context(), agentID, status)
+			if err != nil {
+				writeErr(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]interface{}{"alerts": alerts, "total": len(alerts)})
+			return
+		}
 		resolved := r.URL.Query().Get("resolved") == "1"
 		alerts, err := h.svc.ListAlerts(r.Context(), agentID, resolved)
 		if err != nil {

@@ -110,7 +110,7 @@ func (s adminMonitorSource) Summarize(ctx context.Context, window time.Duration,
 	}
 
 	summary := &admin.MonitorSummary{
-		SeriesWindow: window,
+		SeriesWindow: window.String(),
 		GeneratedAt:  time.Now().UTC(),
 	}
 

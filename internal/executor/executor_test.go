@@ -242,10 +242,26 @@ func TestTaskService_List(t *testing.T) {
 }
 
 func TestTaskService_StartAndComplete(t *testing.T) {
-	svc, _ := newTestService()
+	svc, repo := newTestService()
 	ctx := context.Background()
 
-	created, _ := svc.Create(ctx, "agent-1", "test")
+	created, err := svc.Create(ctx, "agent-1", "test")
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	// 必须先清空子任务：Create 会经 decomposer 分配子任务，而 Start 见到子任务
+	// 就会起 goroutine 异步推进，与下面同步的 Get 断言形成竞态
+	// （在整机并行跑 -race 时表现为「expected in_progress, got completed」）。
+	// 本测试要断言的是 Start 的状态迁移本身，因此使用无子任务的任务。
+	stored, err := repo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("reload task failed: %v", err)
+	}
+	stored.Subtasks = nil
+	if err := repo.Update(ctx, stored); err != nil {
+		t.Fatalf("prepare task failed: %v", err)
+	}
 
 	if err := svc.Start(ctx, created.ID); err != nil {
 		t.Fatalf("Start failed: %v", err)

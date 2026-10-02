@@ -103,8 +103,9 @@ type MonitorSummary struct {
 	Series []AgentSeriesSummary `json:"series,omitempty"`
 	// Dispositions 是告警处置进度。
 	Dispositions *DispositionProgress `json:"dispositions,omitempty"`
-	// SeriesWindow 是时间序列摘要所用的窗口（回显给前端）。
-	SeriesWindow time.Duration `json:"series_window"`
+	// SeriesWindow 是时间序列摘要所用的窗口，以可读时长字符串回显（如 "30m0s"）。
+	// 刻意不用 time.Duration 直接序列化：那会输出纳秒整数，前端每次都要自己换算。
+	SeriesWindow string `json:"series_window"`
 	// GeneratedAt 是摘要生成时刻。
 	GeneratedAt time.Time `json:"generated_at"`
 	// Degraded 为 true 表示时间序列或处置进度至少有一项取数失败。
