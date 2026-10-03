@@ -79,31 +79,51 @@ func (s *service) Count(ctx context.Context, filter Filter) (int, error) {
 }
 
 // Export 导出符合条件的事件。支持 json 与 csv 两种格式。
-func (s *service) Export(ctx context.Context, filter Filter, format string) ([]byte, error) {
+//
+// 返回的是 ExportResult：产物本身 + 完整性元信息（条数/摘要/覆盖时间窗/
+// 截断标记）。摘要让拿到文件的一方可以独立验证内容未被篡改。
+func (s *service) Export(ctx context.Context, filter Filter, format string) (ExportResult, error) {
 	if s.repo == nil {
-		return nil, fmt.Errorf("audit: repository is not configured")
+		return ExportResult{}, fmt.Errorf("audit: repository is not configured")
 	}
-	format = strings.ToLower(strings.TrimSpace(format))
+	format = lowerTrim(format)
 	if format == "" {
 		format = FormatJSON
 	}
 	if format != FormatJSON && format != FormatCSV {
-		return nil, ErrUnsupportedFormat
+		return ExportResult{}, ErrUnsupportedFormat
+	}
+	if over, _ := isOverWindow(filter.StartTime, filter.EndTime); over {
+		return ExportResult{}, ErrExportRangeTooLarge
 	}
 
-	// 导出时忽略分页，最多导出 maxLimit 条，避免全量落盘。
+	// 先数命中总数，用于如实标注「是否被截断」。
+	total, err := s.repo.Count(ctx, normalizeFilter(filter))
+	if err != nil {
+		return ExportResult{}, err
+	}
+
+	// 导出忽略分页，最多导出 maxLimit 条，避免全量落盘。
 	f := normalizeFilter(filter)
 	f.Offset = 0
 	f.Limit = maxLimit
 
 	records, err := s.repo.List(ctx, f)
 	if err != nil {
-		return nil, err
+		return ExportResult{}, err
 	}
-	if format == FormatCSV {
-		return exportCSV(records), nil
+
+	truncated := total > len(records)
+	limit := 0
+	if truncated {
+		limit = maxLimit
 	}
-	return exportJSON(records)
+	return buildExport(records, format, total, truncated, limit, nowUTC())
+}
+
+// VerifyExport 校验一份导出产物与其声明的元信息是否一致。
+func (s *service) VerifyExport(data []byte, manifest ExportManifest) (bool, string) {
+	return VerifyExport(data, manifest)
 }
 
 // Stats 按维度聚合事件数量，用于审计看板。dimension 取值见 Distinct* 常量。

@@ -90,7 +90,9 @@ type Service interface {
 	// Count counts events matching filter
 	Count(ctx context.Context, filter Filter) (int, error)
 	// Export exports audit events
-	Export(ctx context.Context, filter Filter, format string) ([]byte, error)
+	Export(ctx context.Context, filter Filter, format string) (ExportResult, error)
+	// VerifyExport 校验导出产物与声明的元信息是否一致（条数 + 摘要）
+	VerifyExport(data []byte, manifest ExportManifest) (bool, string)
 	// Stats 按维度聚合事件数量
 	Stats(ctx context.Context, filter Filter, dimension string) (map[string]int, error)
 	// Distinct 返回指定维度的去重取值

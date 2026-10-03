@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +15,14 @@ import (
 func newTestService(t *testing.T) Service {
 	t.Helper()
 	return NewService(NewMemoryRepository())
+}
+
+// newTestServerWithMux 用调用方自备的 mux 起测试服务器（用于需要挂留存服务的场景）。
+func newTestServerWithMux(t *testing.T, mux *http.ServeMux) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
 }
 
 func mustLog(t *testing.T, svc Service, ev Event) *EventRecord {
@@ -444,20 +454,33 @@ func TestExportJSON(t *testing.T) {
 
 	mustLog(t, svc, Event{Action: "agent.created", Actor: "a1", Resource: ResourceAgent})
 
-	data, err := svc.Export(ctx, Filter{}, FormatJSON)
+	res, err := svc.Export(ctx, Filter{}, FormatJSON)
 	if err != nil {
 		t.Fatalf("Export error: %v", err)
 	}
 
+	// 新格式：manifest + records，且 manifest 自带条数与摘要。
 	var payload struct {
-		Count   int            `json:"count"`
-		Records []*EventRecord `json:"records"`
+		Manifest ExportManifest `json:"manifest"`
+		Records  []*EventRecord `json:"records"`
 	}
-	if err := json.Unmarshal(data, &payload); err != nil {
-		t.Fatalf("invalid JSON export: %v\n%s", err, data)
+	if err := json.Unmarshal(res.Data, &payload); err != nil {
+		t.Fatalf("invalid JSON export: %v\n%s", err, res.Data)
 	}
-	if payload.Count != 1 || len(payload.Records) != 1 {
-		t.Fatalf("payload = %+v, want 1 record", payload)
+	if len(payload.Records) != 1 {
+		t.Fatalf("records = %d, want 1", len(payload.Records))
+	}
+	if payload.Manifest.Count != 1 {
+		t.Errorf("manifest.count = %d, want 1", payload.Manifest.Count)
+	}
+	if payload.Manifest.SHA256 == "" {
+		t.Error("manifest.sha256 is empty")
+	}
+	if payload.Manifest.Algo != ExportHashAlgo {
+		t.Errorf("manifest.algo = %q, want %q", payload.Manifest.Algo, ExportHashAlgo)
+	}
+	if payload.Manifest.WindowStart == "" || payload.Manifest.WindowEnd == "" {
+		t.Error("manifest window is empty for non-empty export")
 	}
 	if payload.Records[0].Action != "agent.created" {
 		t.Errorf("action = %q, want agent.created", payload.Records[0].Action)
@@ -467,13 +490,19 @@ func TestExportJSON(t *testing.T) {
 func TestExportJSON_EmptyIsArray(t *testing.T) {
 	svc := newTestService(t)
 
-	data, err := svc.Export(context.Background(), Filter{}, FormatJSON)
+	res, err := svc.Export(context.Background(), Filter{}, FormatJSON)
 	if err != nil {
 		t.Fatalf("Export error: %v", err)
 	}
 	// 空结果必须导出为 []，而不是 null，避免下游解析崩溃
-	if !strings.Contains(string(data), `"records": []`) {
-		t.Errorf("empty export = %s, want records: []", data)
+	if !strings.Contains(string(res.Data), `"records": []`) {
+		t.Errorf("empty export = %s, want records: []", res.Data)
+	}
+	if res.Manifest.Count != 0 {
+		t.Errorf("manifest.count = %d, want 0", res.Manifest.Count)
+	}
+	if res.Manifest.Truncated {
+		t.Error("empty export marked truncated")
 	}
 }
 
@@ -490,14 +519,14 @@ func TestExportCSV(t *testing.T) {
 		IPAddress:  "10.0.0.1",
 	})
 
-	data, err := svc.Export(ctx, Filter{}, FormatCSV)
+	res, err := svc.Export(ctx, Filter{}, FormatCSV)
 	if err != nil {
 		t.Fatalf("Export error: %v", err)
 	}
 
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	lines := strings.Split(strings.TrimSpace(string(res.Data)), "\n")
 	if len(lines) != 2 {
-		t.Fatalf("csv lines = %d, want 2 (header + 1 row)\n%s", len(lines), data)
+		t.Fatalf("csv lines = %d, want 2 (header + 1 row)\n%s", len(lines), res.Data)
 	}
 	if !strings.HasPrefix(lines[0], "id,timestamp,actor") {
 		t.Errorf("header = %q, want id,timestamp,actor prefix", lines[0])
@@ -507,6 +536,16 @@ func TestExportCSV(t *testing.T) {
 	}
 	if !strings.Contains(lines[1], "10.0.0.1") {
 		t.Errorf("row = %q, want to contain ip", lines[1])
+	}
+	if res.Manifest.Format != FormatCSV {
+		t.Errorf("manifest.format = %q, want csv", res.Manifest.Format)
+	}
+	if res.Manifest.Count != 1 {
+		t.Errorf("manifest.count = %d, want 1", res.Manifest.Count)
+	}
+	// CSV 摘要覆盖正文，必须能被独立重算出来。
+	if ComputeDigest(res.Data) != res.Manifest.SHA256 {
+		t.Error("csv manifest digest does not match content")
 	}
 }
 

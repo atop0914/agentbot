@@ -12,11 +12,22 @@ import (
 // Handler 提供审计日志的 HTTP 接口。
 type Handler struct {
 	svc Service
+	// retention 可选：配置后开放留存策略读写与清理接口。
+	retention *RetentionService
 }
 
 // NewHandler 创建审计 HTTP 处理器。
 func NewHandler(svc Service) *Handler {
 	return &Handler{svc: svc}
+}
+
+// WithRetention 挂载留存服务，启用 /retention 系列接口。
+//
+// 不挂在 NewHandler 里是为了让「只想读日志」的调用方不必构造留存策略，
+// 同时让「留存未配置」成为可探测的状态（接口返回 503 而不是静默成功）。
+func (h *Handler) WithRetention(rs *RetentionService) *Handler {
+	h.retention = rs
+	return h
 }
 
 // RegisterRoutes 注册审计相关路由。
@@ -26,16 +37,43 @@ func NewHandler(svc Service) *Handler {
 //	GET    /api/v1/audit/events/{id}       查看单条事件
 //	GET    /api/v1/audit/stats             按维度聚合统计
 //	GET    /api/v1/audit/distinct          维度去重取值（筛选器选项）
-//	GET    /api/v1/audit/export            导出（?format=json|csv）
-//	DELETE /api/v1/audit/purge             清理早于 before 的事件
+//	GET    /api/v1/audit/export            导出（?format=json|csv），multipart 返回产物 + manifest
+//	POST   /api/v1/audit/export/verify     校验导出产物与 manifest 是否一致
+//	GET    /api/v1/audit/retention         查询留存策略
+//	PUT    /api/v1/audit/retention         更新留存策略
+//	POST   /api/v1/audit/retention/purge   按策略清理（默认 dry-run）
+//	DELETE /api/v1/audit/purge             按显式 before 时间清理
+//
+// 注意：/export/verify 与 /retention/purge 都是「集合路径 + 子资源」，
+// 前缀规则 /api/v1/audit/ 覆盖得到，但权限表里仍需按其真实语义登记。
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/audit/events", h.handleEvents)
 	mux.HandleFunc("/api/v1/audit/events/", h.handleEventByID)
 	mux.HandleFunc("/api/v1/audit/stats", h.handleStats)
 	mux.HandleFunc("/api/v1/audit/distinct", h.handleDistinct)
 	mux.HandleFunc("/api/v1/audit/export", h.handleExport)
+	mux.HandleFunc("/api/v1/audit/export/verify", h.handleVerify)
+	mux.HandleFunc("/api/v1/audit/retention", h.handleRetention)
+	mux.HandleFunc("/api/v1/audit/retention/purge", h.handleRetentionPurge)
 	mux.HandleFunc("/api/v1/audit/purge", h.handlePurge)
 }
+
+// actorFromRequest 从请求里取操作者标识，用于留存策略的变更留痕。
+//
+// 这里刻意只读 context 里已认证的身份（由认证中间件写入），
+// **不读任何客户端可伪造的请求头** —— 否则「谁改了留存策略」就不可信了。
+func actorFromRequest(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	if id, ok := r.Context().Value(actorContextKey{}).(string); ok {
+		return id
+	}
+	return ""
+}
+
+// actorContextKey 是审计模块在 context 中保存操作者的键。
+type actorContextKey struct{}
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
@@ -56,7 +94,9 @@ func statusFor(err error) int {
 		errors.Is(err, ErrEventRequired),
 		errors.Is(err, ErrCutoffRequired),
 		errors.Is(err, ErrUnknownDistinctField),
-		errors.Is(err, ErrUnsupportedFormat):
+		errors.Is(err, ErrUnsupportedFormat),
+		errors.Is(err, ErrExportRangeTooLarge),
+		errors.Is(err, ErrInvalidRetention):
 		return http.StatusBadRequest
 	case errors.Is(err, ErrEventNotFound):
 		return http.StatusNotFound
@@ -221,23 +261,17 @@ func (h *Handler) handleExport(w http.ResponseWriter, r *http.Request) {
 		format = FormatJSON
 	}
 
-	data, err := h.svc.Export(r.Context(), filter, format)
+	res, err := h.svc.Export(r.Context(), filter, format)
 	if err != nil {
 		writeErr(w, statusFor(err), err.Error())
 		return
 	}
 
-	// 导出走原生响应体，不套 JSON 包装，方便直接落盘。
-	filename := "audit-export-" + time.Now().UTC().Format("20060102-150405")
-	if strings.EqualFold(format, FormatCSV) {
-		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-		w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`.csv"`)
-	} else {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`.json"`)
+	// Multipart 导出：manifest 作为独立 part 随产物一起下载。
+	// 这样归档文件自带校验依据，拿到文件的一方可以独立重算摘要。
+	if err := writeExportResponse(w, res); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
 	}
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(data)
 }
 
 func (h *Handler) handlePurge(w http.ResponseWriter, r *http.Request) {

@@ -3,6 +3,9 @@ package audit
 import (
 	"bytes"
 	"encoding/json"
+	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -51,6 +54,56 @@ func doJSON(t *testing.T, method, url string, body interface{}) (*http.Response,
 		t.Fatalf("read body: %v", err)
 	}
 	return resp, buf.Bytes()
+}
+
+// readExportParts 从 multipart/mixed 导出响应里取出「产物」与「manifest」两部分。
+//
+// 刻意不复用 HTTP 头里的摘要：校验必须对产物本身做，头可以被中间层改写。
+func readExportParts(t *testing.T, contentType string, body []byte) ([]byte, ExportManifest) {
+	t.Helper()
+
+	_, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		t.Fatalf("parse media type: %v", err)
+	}
+	boundary := params["boundary"]
+	if boundary == "" {
+		t.Fatalf("no boundary in content-type %q", contentType)
+	}
+
+	mr := multipart.NewReader(bytes.NewReader(body), boundary)
+	var product []byte
+	var manifest ExportManifest
+	found := 0
+	for {
+		part, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("read part: %v", err)
+		}
+		raw, err := io.ReadAll(part)
+		part.Close()
+		if err != nil {
+			t.Fatalf("read part body: %v", err)
+		}
+		found++
+		if part.FormName() == "" && part.FileName() == ExportManifestPart {
+			if err := json.Unmarshal(raw, &manifest); err != nil {
+				t.Fatalf("unmarshal manifest: %v\n%s", err, raw)
+			}
+			continue
+		}
+		product = raw
+	}
+	if found != 2 {
+		t.Fatalf("multipart parts = %d, want 2", found)
+	}
+	if product == nil {
+		t.Fatal("product part not found")
+	}
+	return product, manifest
 }
 
 func TestHandler_CreateAndListEvents(t *testing.T) {
@@ -287,21 +340,37 @@ func TestHandler_ExportJSON(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200, body=%s", resp.StatusCode, body)
 	}
-	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "application/json") {
-		t.Errorf("content-type = %q, want application/json", ct)
+	// 产物与 manifest 同一份 multipart 下发，manifest 不能只存在于响应头里。
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "multipart/mixed") {
+		t.Fatalf("content-type = %q, want multipart/mixed", ct)
 	}
 	if cd := resp.Header.Get("Content-Disposition"); !strings.Contains(cd, "attachment") {
 		t.Errorf("content-disposition = %q, want attachment", cd)
 	}
+	// 摘要与条数同时出现在响应头，便于不解析 body 就做快速核对。
+	if resp.Header.Get("X-Audit-SHA256") == "" {
+		t.Error("missing X-Audit-SHA256 header")
+	}
+	if got := resp.Header.Get("X-Audit-Count"); got != "1" {
+		t.Errorf("X-Audit-Count = %q, want 1", got)
+	}
 
-	var payload struct {
-		Count int `json:"count"`
+	product, manifest := readExportParts(t, resp.Header.Get("Content-Type"), body)
+	_ = product
+
+	if manifest.Count != 1 {
+		t.Fatalf("manifest.count = %d, want 1", manifest.Count)
 	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		t.Fatalf("unmarshal export: %v", err)
+	if manifest.SHA256 == "" {
+		t.Error("manifest.sha256 is empty")
 	}
-	if payload.Count != 1 {
-		t.Fatalf("count = %d, want 1", payload.Count)
+	if manifest.Format != FormatJSON {
+		t.Errorf("manifest.format = %q, want json", manifest.Format)
+	}
+	// 校验接口必须能把「产物 + manifest」判为通过。
+	ok, reason := svc.VerifyExport(product, manifest)
+	if !ok {
+		t.Fatalf("VerifyExport = false (%s), want true", reason)
 	}
 }
 
@@ -314,11 +383,17 @@ func TestHandler_ExportCSV(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200, body=%s", resp.StatusCode, body)
 	}
-	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "text/csv") {
-		t.Errorf("content-type = %q, want text/csv", ct)
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "multipart/mixed") {
+		t.Fatalf("content-type = %q, want multipart/mixed", ct)
 	}
-	if !strings.Contains(string(body), "id,timestamp,actor") {
-		t.Errorf("body = %s, want csv header", body)
+
+	product, manifest := readExportParts(t, resp.Header.Get("Content-Type"), body)
+	if !strings.Contains(string(product), "id,timestamp,actor") {
+		t.Errorf("product = %s, want csv header", product)
+	}
+	ok, reason := svc.VerifyExport(product, manifest)
+	if !ok {
+		t.Fatalf("VerifyExport = false (%s), want true", reason)
 	}
 }
 

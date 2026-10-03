@@ -21,6 +21,8 @@ var (
 	ErrUnknownDistinctField = errors.New("audit: unknown distinct field")
 	// ErrUnsupportedFormat 表示请求了不支持的导出格式。
 	ErrUnsupportedFormat = errors.New("audit: unsupported export format")
+	// ErrExportRangeTooLarge 表示导出的时间窗跨度超过上限。
+	ErrExportRangeTooLarge = errors.New("audit: export time range exceeds limit")
 	// ErrNilEvent 表示写入的事件指针为空。
 	ErrNilEvent = errors.New("audit: event is nil")
 	// ErrInvalidRetention 表示留存策略配置非法（保留期必须为正）。
