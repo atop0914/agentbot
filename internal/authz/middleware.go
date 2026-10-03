@@ -253,6 +253,14 @@ func DefaultRouteTable() *RouteTable {
 		{Method: http.MethodGet, Pattern: "/api/v1/audit/", Action: role.PermRoleManage},
 		{Method: http.MethodPost, Pattern: "/api/v1/audit/events", Action: role.PermRoleManage},
 		{Method: http.MethodPost, Pattern: "/api/v1/audit/purge", Action: role.PermRoleManage},
+		// 留存策略与清理：改保留期等价于决定「证据能留多久」，
+		// 与删除历史数据同级敏感，一律 role:manage。
+		// 注意 /retention、/retention/purge、/export/verify 都是
+		// 无尾斜杠的集合路径 / 子资源，前缀规则覆盖不到，必须显式登记。
+		{Method: http.MethodGet, Pattern: "/api/v1/audit/retention", Action: role.PermRoleManage},
+		{Method: http.MethodPut, Pattern: "/api/v1/audit/retention", Action: role.PermRoleManage},
+		{Method: http.MethodPost, Pattern: "/api/v1/audit/retention/purge", Action: role.PermRoleManage},
+		{Method: http.MethodPost, Pattern: "/api/v1/audit/export/verify", Action: role.PermRoleManage},
 
 		// 角色与权限矩阵（元权限）
 		{Method: http.MethodGet, Pattern: "/api/v1/roles", Action: role.PermRoleManage},

@@ -185,7 +185,9 @@ func New() *App {
 	// Audit log (需要早于监控装配：告警处置要落审计)
 	auditRepo := audit.NewMemoryRepository()
 	auditSvc := audit.NewService(auditRepo)
-	auditH := audit.NewHandler(auditSvc)
+	// 留存策略：默认 90 天。挂在 handler 上后 /retention 系列接口可用。
+	auditRetention := audit.NewRetentionService(auditSvc)
+	auditH := audit.NewHandler(auditSvc).WithRetention(auditRetention)
 	auditRec := audit.NewRecorder(auditSvc)
 
 	// 把告警处置接到审计：认领/解决/重开都会留下一条 agent 维度的审计事件，
