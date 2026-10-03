@@ -1,6 +1,9 @@
 package audit
 
-import "errors"
+import (
+	"errors"
+	"time"
+)
 
 // 审计模块的哨兵错误，便于 handler 层用 errors.Is 判定后映射 HTTP 状态码。
 var (
@@ -18,6 +21,10 @@ var (
 	ErrUnknownDistinctField = errors.New("audit: unknown distinct field")
 	// ErrUnsupportedFormat 表示请求了不支持的导出格式。
 	ErrUnsupportedFormat = errors.New("audit: unsupported export format")
+	// ErrNilEvent 表示写入的事件指针为空。
+	ErrNilEvent = errors.New("audit: event is nil")
+	// ErrInvalidRetention 表示留存策略配置非法（保留期必须为正）。
+	ErrInvalidRetention = errors.New("audit: retention must be positive")
 )
 
 // 事件状态与操作者类型的取值。
@@ -54,4 +61,22 @@ const (
 const (
 	FormatJSON = "json"
 	FormatCSV  = "csv"
+)
+
+// 留存与脱敏相关常量。
+const (
+	// DefaultRetentionDays 是未配置留存策略时的默认保留期（天）。
+	DefaultRetentionDays = 90
+	// UnlimitedRetention 表示显式关闭自动清理。
+	// 审计日志是取证依据，企业侧有时需要长期保留，因此保留「不清理」这一档，
+	// 但必须由调用方显式选择，绝不作为默认值。
+	UnlimitedRetention = 0
+
+	// RedactedPlaceholder 是敏感字段脱敏后的占位符。
+	RedactedPlaceholder = "[REDACTED]"
+
+	// ExportHashAlgo 是导出摘要使用的算法标识。
+	ExportHashAlgo = "sha256"
+	// MaxExportRange 是单次按时间窗导出的最大跨度（31 天）。
+	MaxExportRange = 31 * 24 * time.Hour
 )

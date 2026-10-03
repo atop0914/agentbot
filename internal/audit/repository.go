@@ -19,6 +19,10 @@ type EventRecord struct {
 // Repository 定义审计事件的持久化接口。
 type Repository interface {
 	// Append 追加一条审计事件并返回补全 ID/时间戳后的记录。
+	//
+	// 实现必须保证：写入前对 Details 做敏感字段脱敏（见 redact.go）。
+	// 脱敏放在仓库层而不是服务层，是为了让任何绕过服务层直接落库的
+	// 调用路径也拿到同样的保护 —— 这是 fail-closed 的写入边界。
 	Append(ctx context.Context, event Event) (*EventRecord, error)
 	// List 按过滤条件查询事件，返回结果已排序。
 	List(ctx context.Context, filter Filter) ([]*EventRecord, error)
@@ -76,7 +80,13 @@ func (r *memoryRepository) Append(_ context.Context, event Event) (*EventRecord,
 		for k, v := range rec.Details {
 			cp[k] = v
 		}
-		rec.Details = cp
+		// 写入前脱敏：密钥类字段替换为占位符，并把被脱敏的键路径
+		// 登记进 _redacted，便于事后排查「这里原本有个凭证」。
+		redacted, paths := RedactDetails(cp)
+		if len(paths) > 0 {
+			redacted[RedactedKeysField] = paths
+		}
+		rec.Details = redacted
 	}
 	r.seq++
 	rec.Seq = r.seq
