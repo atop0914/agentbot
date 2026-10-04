@@ -382,10 +382,22 @@ func (h *Handler) handleSummary(w http.ResponseWriter, r *http.Request) {
 		counts[string(rule.Effect)]++
 	}
 
+	// 响应形状与 admin.NetworkSummary 对齐（协议一致）：
+	//
+	//   - 策略计数是**扁平**的 total_rules / allow_rules / deny_rules，
+	//     不是嵌套的 rule_counts。控制台要能一眼回答「出口开了几个口子」，
+	//     嵌套结构逼着前端再拆一层，而两处形状不一致时极易对不上。
+	//   - 域名列表用控制台视图的字段名（requests / blocked / bytes / suspicious），
+	//     而不是 network.DomainStat 的全量字段。
+	//
+	// 这样后台分区可直接复用本接口的响应体，不需要再写一层转换；
+	// 一旦这里漂移，TestNetworkAdminSnapshotCarriesNetworkSection 会失败。
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"generated_at":        stats.GeneratedAt,
 		"window":              stats.Window,
-		"rule_counts":         counts,
+		"total_rules":         len(rules),
+		"allow_rules":         counts[string(EffectAllow)],
+		"deny_rules":          counts[string(EffectDeny)],
 		"total_requests":      stats.TotalRequests,
 		"allowed_requests":    stats.AllowedRequests,
 		"blocked_requests":    stats.BlockedRequests,
@@ -393,22 +405,53 @@ func (h *Handler) handleSummary(w http.ResponseWriter, r *http.Request) {
 		"distinct_domains":    stats.DistinctDomains,
 		"suspicious_requests": stats.SuspiciousRequests,
 		"total_bytes":         stats.TotalBytes,
-		"top_domains":         truncateDomains(stats.Domains, defaultSummaryDomains),
-		"suspicious_domains":  truncateDomains(stats.SuspiciousDomains, defaultSummaryDomains),
+		"top_domains":         summaryDomains(stats.Domains, defaultSummaryDomains),
+		"suspicious_domains":  summaryDomains(stats.SuspiciousDomains, defaultSummaryDomains),
 	})
 }
 
 // defaultSummaryDomains 是摘要里携带的域名条数上限。
 const defaultSummaryDomains = 5
 
-func truncateDomains(domains []*DomainStat, n int) []*DomainStat {
-	if len(domains) <= n {
-		if domains == nil {
-			return []*DomainStat{}
-		}
-		return domains
+// summaryDomainView 是摘要里携带的域名视图。
+//
+// 只带控制台要展示的字段：全量字段（首次/末次出现、平均耗时）留给
+// /api/v1/network/stats，聚合视图不该把明细接口的响应体复制一遍。
+type summaryDomainView struct {
+	Domain     string   `json:"domain"`
+	Requests   int      `json:"requests"`
+	Blocked    int      `json:"blocked"`
+	Bytes      int64    `json:"bytes"`
+	Suspicious bool     `json:"suspicious"`
+	Reasons    []string `json:"reasons,omitempty"`
+}
+
+// summaryDomains 把域名统计裁剪成摘要视图。
+//
+// 始终返回非 nil 切片：nil 会被 JSON 序列化成 null，控制台渲染
+// 列表时要为 null 单独兜底，而空数组不需要。
+func summaryDomains(domains []*DomainStat, n int) []summaryDomainView {
+	if n <= 0 {
+		n = defaultSummaryDomains
 	}
-	return domains[:n]
+	out := make([]summaryDomainView, 0, len(domains))
+	for _, d := range domains {
+		if d == nil {
+			continue
+		}
+		out = append(out, summaryDomainView{
+			Domain:     d.Domain,
+			Requests:   d.Requests,
+			Blocked:    d.Blocked,
+			Bytes:      d.Bytes,
+			Suspicious: d.Suspicious,
+			Reasons:    append([]string(nil), d.Reasons...),
+		})
+		if len(out) >= n {
+			break
+		}
+	}
+	return out
 }
 
 func parseTrafficFilter(r *http.Request) (TrafficFilter, error) {

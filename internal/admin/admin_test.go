@@ -74,6 +74,26 @@ func (f *fakeMonitorSource) Summarize(_ context.Context, window time.Duration, _
 	return &MonitorSummary{SeriesWindow: window.String(), GeneratedAt: time.Now().UTC()}, nil
 }
 
+// fakeNetworkSource 是 NetworkSource 的测试替身。
+type fakeNetworkSource struct {
+	summary *NetworkSummary
+	err     error
+}
+
+func (f *fakeNetworkSource) Summarize(_ context.Context, window time.Duration) (*NetworkSummary, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.summary != nil {
+		return f.summary, nil
+	}
+	return &NetworkSummary{
+		Window:      window.String(),
+		GeneratedAt: time.Now().UTC(),
+		TopDomains:  []NetworkDomainView{},
+	}, nil
+}
+
 type fakeAuditSource struct {
 	items []*AuditView
 	err   error
@@ -320,6 +340,11 @@ func TestSnapshotOverviewAggregatesAllSources(t *testing.T) {
 			{ID: "u2", Username: "bob", Email: "bob@example.com", Status: "inactive", Role: "user", Provider: "github", CreatedAt: now.Add(-time.Minute)},
 		}, total: 2},
 		Authz: &fakeAuthzSource{stats: &AuthzStats{TotalAssignments: 3, UserAssignments: 2, AgentAssignments: 1, ByRole: map[string]int{"role-worker": 1}}},
+		Network: &fakeNetworkSource{summary: &NetworkSummary{
+			TotalRules: 3, DenyRules: 3,
+			BlockedRequests: 1, TotalRequests: 1, DistinctDomains: 1,
+			TopDomains: []NetworkDomainView{{Domain: "c2.evil.xyz", Requests: 1, Blocked: 1, Suspicious: true}},
+		}},
 	}
 	svc := newTestService(t, src)
 
@@ -477,10 +502,10 @@ func TestSnapshotDoesNotPanicWithNoSources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
-	// 未装配的数据源：agents / tasks / alerts / audit / users 五个分区降级。
+	// 未装配的数据源：agents / tasks / alerts / audit / users / network 六个分区降级。
 	// plugins 与 static 不依赖外部数据源，因此仍能正常渲染。
-	if len(snap.Errors) != 5 {
-		t.Errorf("Errors has %d entries, want 5 (one per unconfigured source): %v", len(snap.Errors), snap.Errors)
+	if len(snap.Errors) != 6 {
+		t.Errorf("Errors has %d entries, want 6 (one per unconfigured source): %v", len(snap.Errors), snap.Errors)
 	}
 	if snap.Overview == nil || !snap.Overview.Degraded {
 		t.Error("Overview should be present and marked degraded")
@@ -1003,5 +1028,80 @@ func TestParseSnapshotQueryDefaults(t *testing.T) {
 	}
 	if len(q.Sections) != len(AllSections()) {
 		t.Errorf("Sections = %v, want all", q.Sections)
+	}
+}
+
+// TestSnapshotNetworkSectionRendersAndDegrades 验证 network 分区：
+//  1. 装配了数据源时正常渲染策略计数与可疑外联；
+//  2. 数据源失败时只让 network 分区降级，其余分区照常渲染。
+func TestSnapshotNetworkSectionRendersAndDegrades(t *testing.T) {
+	now := baseTime()
+
+	// 1. 正常渲染。
+	src := Sources{
+		Agents: &fakeAgentSource{items: []*AgentView{{ID: "a1", State: "running", UpdatedAt: now}}},
+		Network: &fakeNetworkSource{summary: &NetworkSummary{
+			TotalRules:      4,
+			AllowRules:      1,
+			DenyRules:       3,
+			TotalRequests:   10,
+			BlockedRequests: 4,
+			DistinctDomains: 2,
+			TopDomains: []NetworkDomainView{
+				{Domain: "api.example.com", Requests: 6, Bytes: 1024},
+				{Domain: "c2.evil.xyz", Requests: 4, Blocked: 4, Suspicious: true,
+					Reasons: []string{"high-risk tld: .xyz"}},
+			},
+			SuspiciousDomains: []NetworkDomainView{
+				{Domain: "c2.evil.xyz", Requests: 4, Blocked: 4, Suspicious: true,
+					Reasons: []string{"high-risk tld: .xyz"}},
+			},
+		}},
+	}
+	svc := newTestService(t, src)
+	snap, err := svc.Snapshot(context.Background(), SnapshotQuery{
+		Sections: []Section{SectionNetwork, SectionAgents},
+	})
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if snap.Network == nil {
+		t.Fatalf("network section is nil (errors=%v)", snap.Errors)
+	}
+	if snap.Network.DenyRules != 3 || snap.Network.AllowRules != 1 {
+		t.Errorf("rule counts = %d/%d, want deny=3 allow=1",
+			snap.Network.DenyRules, snap.Network.AllowRules)
+	}
+	if snap.Network.BlockedRequests != 4 {
+		t.Errorf("blocked = %d, want 4", snap.Network.BlockedRequests)
+	}
+	if len(snap.Network.SuspiciousDomains) != 1 {
+		t.Errorf("suspicious domains = %+v, want 1", snap.Network.SuspiciousDomains)
+	}
+	if _, degraded := snap.Errors[string(SectionNetwork)]; degraded {
+		t.Errorf("network section should be healthy: %v", snap.Errors)
+	}
+	// 分区增加不应影响其他分区。
+	if snap.Agents == nil {
+		t.Error("agents section must still render")
+	}
+
+	// 2. 数据源失败：只有 network 分区降级。
+	src.Network = &fakeNetworkSource{err: errors.New("admin: network source is not configured")}
+	svc = newTestService(t, src)
+	snap, err = svc.Snapshot(context.Background(), SnapshotQuery{
+		Sections: []Section{SectionNetwork, SectionAgents},
+	})
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if snap.Network != nil {
+		t.Error("network section must be absent when its source fails")
+	}
+	if _, ok := snap.Errors[string(SectionNetwork)]; !ok {
+		t.Errorf("Errors should carry the network section key: %v", snap.Errors)
+	}
+	if snap.Agents == nil {
+		t.Error("a failing network section must not take down the agents section")
 	}
 }
