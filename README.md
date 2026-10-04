@@ -30,6 +30,7 @@ agentbot/
 │   ├── template/               # 工作流模板 + 模板市场
 │   ├── monitor/                # 健康监控 + 告警
 │   ├── audit/                  # 审计日志 + 操作回放
+│   ├── network/                # 网络出口路由（策略 / 网关 / 出站流量审计）
 │   ├── admin/                  # 管理后台聚合视图 + 静态资源托管
 │   └── websocket/              # 实时通信
 ├── pkg/config/                 # 配置加载
@@ -55,6 +56,7 @@ agentbot/
 - [x] 工作流模板 + 模板市场
 - [x] Agent 健康监控 + 告警规则
 - [x] 审计日志（查询、聚合、导出、清理）
+- [x] 网络出口路由（出口策略 + 代理网关 + 出站流量审计）
 - [x] 管理后台服务端（聚合视图 + 配置 + 静态资源托管）
 - [x] 实时通信（WebSocket）
 
@@ -99,6 +101,7 @@ POST   /api/v1/auth/login             登录
        /api/v1/marketplace             模板市场
        /api/v1/monitor                 健康监控与告警
        /api/v1/audit                   审计日志查询/聚合/导出
+       /api/v1/network                 出口策略 / 网关代理 / 出站流量审计
        /api/v1/admin                   管理后台配置 + 聚合视图
        /admin/*                        管理后台前端静态资源
        /api/v1/ws                      WebSocket 实时通道
@@ -110,6 +113,9 @@ POST   /api/v1/auth/login             登录
 - 存进仓库的结构体存副本，避免调用方后续修改污染已存数据
 - HTTP 路径参数用 `strings.TrimPrefix` 提取，合法请求始终返回非 nil 切片
 - 新增模块需在 `internal/app/app.go` 装配，并在 `internal/app/router.go` 注册路由
+- 新增路由必须在 `internal/authz` 的路由权限表登记：**无尾斜杠的集合路径**
+  （如 `/api/v1/network/rules`）不会被任何前缀规则覆盖，漏登记即 403
+- 安全边界类模块（出口策略、权限判定）一律 fail-closed：依赖不可用时拒绝而非放行
 
 ## License
 

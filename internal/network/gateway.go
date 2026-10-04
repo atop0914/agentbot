@@ -195,7 +195,9 @@ func (g *HTTPGateway) Proxy(ctx context.Context, req EgressRequest) (*EgressResp
 		g.persist(ctx, rec)
 		return out, fmt.Errorf("network: egress to %s failed: %w", domain, err)
 	}
-	defer resp.Body.Close()
+	// 响应体必须关闭，但关闭失败不影响已经拿到的结果 —— 显式忽略而非
+	// 用裸 defer（否则 errcheck 会把它算成未处理的错误返回）。
+	defer func() { _ = resp.Body.Close() }()
 
 	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxEgressBodyBytes))
 	if readErr != nil {

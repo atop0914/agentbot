@@ -204,6 +204,117 @@ Agent 状态机：`idle → running ⇄ paused → stopped`，异常进入 `erro
 
 ---
 
+## 网络出口路由（Day 26）
+
+Agent 能连上什么，就是它能泄露什么。出口层把「策略 + 网关 + 流量审计」
+做成一条链路：出站请求必须经网关转发，网关在转发**之前**做判定，
+未获允许的目标直接阻断（不建立连接）并落审计。
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/network/rules` | 列出出口策略 |
+| POST | `/network/rules` | 新增策略 |
+| DELETE | `/network/rules/{id}` | 删除策略 |
+| POST | `/network/evaluate` | 出站前预检（只判定，不发请求；允许与否都返回 200） |
+| POST | `/network/proxy` | 经网关转发一次出站请求 |
+| GET | `/network/traffic` | 查询出站流量记录 |
+| POST | `/network/traffic/purge` | 清理流量记录（默认 `dry_run=true`） |
+| GET | `/network/stats?window=24h` | 出站流量聚合统计 |
+| GET | `/network/summary` | 后台「网络」分区摘要 |
+
+### 策略条目
+
+```json
+{
+  "id": "egress-deny-cloud-metadata",
+  "agent_id": "",
+  "target": "169.254.169.254",
+  "effect": "deny",
+  "methods": ["GET", "POST"],
+  "priority": -100,
+  "description": "云元数据服务：Agent 读到实例凭据即可横向移动到整个云账号"
+}
+```
+
+`target` 支持三种写法：**精确域名**（`api.example.com`，含其子域）、
+**通配子域**（`*.example.com`，不匹配 apex 本身）、**任意**（`*`）。
+带 scheme / 端口 / 路径的输入会被**拒绝**（400）——
+那通常意味着作者以为写的是 URL，静默接受会让策略匹配不到任何流量。
+
+`effect` 必须是 `allow` / `deny`；**缺省为 `deny`**（缺省 allow 会是一条静默的口子）。
+
+### 判定顺序
+
+1. **Agent 维度优先于全局维度**——为某个 Agent 单独收紧出口，
+   不会被一条宽泛的全局 allow 抵消；
+2. 同维度内**具体度高的先判定**：精确域名 > 最长通配后缀 > 更短后缀 > `*`；
+3. 具体度相同时 **deny 优先**（fail-closed）；`priority` 数值小的先判定；
+4. 方法不匹配的条目跳过（`methods` 为空表示不限方法）；
+5. **一条都没命中 → 默认拒绝**。
+
+### 阻断与放行的响应差异
+
+未获策略允许时返回 **403**，且响应体带 `decision` 与 `record`，
+让「被哪条规则拦下」可诊断：
+
+```json
+{
+  "error": "network: egress blocked by policy: domain=c2.evil.xyz",
+  "decision": {
+    "allowed": false,
+    "scope": "global",
+    "reason": "default-deny: no egress policy rule allows this destination"
+  },
+  "record": {"domain": "c2.evil.xyz", "allowed": false, "reason": "…"}
+}
+```
+
+放行路径返回 200，body 中是下游的状态码与响应体：
+
+```json
+{"domain": "api.example.com", "status": 200, "body": "…", "decision": {...}, "record": {...}}
+```
+
+**放行与阻断都会写流量记录和审计**（`egress.allowed` / `egress.blocked` /
+`egress.failed`）。只记放行等于给「被拦下的攻击尝试」留盲区 ——
+而那恰恰是最有价值的信号。
+
+### 默认策略
+
+服务启动时会种三条 deny，让最常见的高危外联有**可读的拒绝理由**：
+
+| ID | Target | 理由 |
+|----|--------|------|
+| `egress-deny-cloud-metadata` | `169.254.169.254` | 读到实例凭据即可横向移动整个云账号 |
+| `egress-deny-localhost` | `localhost` | 出站回到平台自身会绕过出口审计的初衷 |
+| `egress-deny-aws-internal` | `*.internal` | 生产内网不应由 Agent 直接访问 |
+
+这**不是白名单**：没有命中任何 allow 条目依然拒绝。三条默认规则的价值在于
+把「默认拒绝」细化成可解释、可统计的具体规则，并防止将来一条宽泛的 allow
+把内网地址捎带放开。
+
+### 流量查询参数
+
+| 参数 | 说明 |
+|------|------|
+| `agent_id` | 按 Agent 过滤 |
+| `domain` | 按域名过滤（含子域） |
+| `allowed` | `true` / `false` |
+| `suspicious` | `true` 只看可疑外联 |
+| `since` / `until` | RFC3339 或 Unix 秒 |
+| `limit` | 返回上限（默认 200）；超限时保留**最近**的记录 |
+
+### 可疑外联启发式
+
+`/network/stats` 与 `/network/summary` 会标记可疑外联，并给出**理由列表**
+（而非一个孤立的布尔位，便于判断误报与调阈值）：
+
+- `high-risk tld: .xyz` —— 高风险 TLD（`.tk` `.ml` `.xyz` `.zip` 等迁移常用域）；
+- `high frequency egress: N requests in window` —— 同域名请求数超过阈值（默认 200）；
+- `direct ip literal destination` —— 直连 IP 字面量，绕过了正常的域名解析路径。
+
+---
+
 ## 审计日志
 
 用于后台的审计查询与操作回放。所有写操作都会补全 `id`、`timestamp`、
@@ -345,6 +456,7 @@ curl -X PUT localhost:8080/api/v1/admin/config \
 | `tasks` | 任务状态分布 |
 | `alerts` | 未处理告警（按严重级别聚合 + 最近若干条） |
 | `audit` | 最近审计事件 + 按动作聚合 |
+| `network` | 网络出口：策略计数（allow/deny）+ Top 外联目标 + 可疑外联 |
 | `plugins` | 功能开关当前取值 |
 | `static` | 静态资源挂载状态 |
 
