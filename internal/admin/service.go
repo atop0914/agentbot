@@ -238,6 +238,17 @@ func (s *service) Snapshot(ctx context.Context, query SnapshotQuery) (*Snapshot,
 		}
 	}
 
+	if q.Includes(SectionNetwork) {
+		// 网络分区的独立降级：出口摘要取不到时只让 network 分区标记不可用，
+		// 其余分区照常渲染（与 agents/tasks 等分区一致）。
+		summary, err := s.fetchNetworkSummary(ctx, q)
+		if err != nil {
+			snap.Errors[string(SectionNetwork)] = err.Error()
+		} else {
+			snap.Network = summary
+		}
+	}
+
 	if q.Includes(SectionPlugins) {
 		snap.Plugins = &PluginDigest{
 			Enabled:  FlagNames(cfg.FeatureFlags, true),
@@ -322,6 +333,26 @@ func monitorWindowFor(q SnapshotQuery) time.Duration {
 		return q.AuditWindow
 	}
 	return DefaultMonitorWindow
+}
+
+// fetchNetworkSummary 取出口摘要（策略计数 + 出站流量）。
+func (s *service) fetchNetworkSummary(ctx context.Context, q SnapshotQuery) (*NetworkSummary, error) {
+	if s.sources.Network == nil {
+		return nil, fmt.Errorf("admin: network source is not configured")
+	}
+	return s.sources.Network.Summarize(ctx, networkWindowFor(q))
+}
+
+// networkWindowFor 解析 network 分区的时间窗。
+//
+// 默认比监控窗口长得多（24h）：外联异常的特征是「低频但持续」，
+// 半小时窗口会把已经发生的横向探测整段漏掉。
+// 显式给出更长的 AuditWindow 时以调用方为准（控制台「看最近 7 天」的场景）。
+func networkWindowFor(q SnapshotQuery) time.Duration {
+	if q.AuditWindow > DefaultNetworkWindow {
+		return q.AuditWindow
+	}
+	return DefaultNetworkWindow
 }
 
 func (s *service) fetchAuditCount(ctx context.Context, since *time.Time) (int, error) {

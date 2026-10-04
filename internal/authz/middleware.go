@@ -262,6 +262,26 @@ func DefaultRouteTable() *RouteTable {
 		{Method: http.MethodPost, Pattern: "/api/v1/audit/retention/purge", Action: role.PermRoleManage},
 		{Method: http.MethodPost, Pattern: "/api/v1/audit/export/verify", Action: role.PermRoleManage},
 
+		// 网络出口路由（Day 26）：策略管理 + 网关代理 + 出站流量审计。
+		//
+		// 注意这一组全部是**无尾斜杠的集合路径 / 子资源**，前缀规则
+		// /api/v1/network/ 覆盖不到（/rules/ 只能覆盖到带 ID 的删除），
+		// 必须逐条显式登记，否则会落进默认拒绝返回 403。
+		//
+		// 权限映射的取舍：
+		//   - 改出口策略 = 决定 Agent 能连什么，属于元级安全配置 → role:manage；
+		//   - 走网关出站 = Agent 用网络能力 → env:execute（与终端同级）；
+		//   - 读流量/统计 = 观测面 → agent:read（与监控口径一致）。
+		{Method: http.MethodGet, Pattern: "/api/v1/network/rules", Action: role.PermRoleManage},
+		{Method: http.MethodPost, Pattern: "/api/v1/network/rules", Action: role.PermRoleManage},
+		{Method: http.MethodDelete, Pattern: "/api/v1/network/rules/", Action: role.PermRoleManage},
+		{Method: http.MethodPost, Pattern: "/api/v1/network/evaluate", Action: role.PermEnvExecute},
+		{Method: http.MethodPost, Pattern: "/api/v1/network/proxy", Action: role.PermEnvExecute},
+		{Method: http.MethodGet, Pattern: "/api/v1/network/traffic", Action: role.PermAgentRead},
+		{Method: http.MethodPost, Pattern: "/api/v1/network/traffic/purge", Action: role.PermRoleManage},
+		{Method: http.MethodGet, Pattern: "/api/v1/network/stats", Action: role.PermAgentRead},
+		{Method: http.MethodGet, Pattern: "/api/v1/network/summary", Action: role.PermAgentRead},
+
 		// 角色与权限矩阵（元权限）
 		{Method: http.MethodGet, Pattern: "/api/v1/roles", Action: role.PermRoleManage},
 		{Method: http.MethodGet, Pattern: "/api/v1/roles/", Action: role.PermRoleManage},

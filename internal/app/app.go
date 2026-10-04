@@ -19,6 +19,7 @@ import (
 	"github.com/atop0914/agentbot/internal/filesystem"
 	"github.com/atop0914/agentbot/internal/memory"
 	"github.com/atop0914/agentbot/internal/monitor"
+	"github.com/atop0914/agentbot/internal/network"
 	"github.com/atop0914/agentbot/internal/role"
 	"github.com/atop0914/agentbot/internal/template"
 	"github.com/atop0914/agentbot/internal/terminal"
@@ -67,6 +68,9 @@ type App struct {
 	AuditRec     audit.Recorder
 	AdminSvc     admin.Service
 	AdminH       *admin.Handler
+	EgressSvc    network.Service
+	EgressH      *network.Handler
+	EgressPolicy *network.MemoryPolicyStore
 }
 
 // New creates a new App with all in-memory services wired up.
@@ -212,9 +216,36 @@ func New() *App {
 		return claims.UserID, nil
 	}
 
+	// 网络出口路由（Day 26）：出口策略 + 代理网关 + 出站流量审计。
+	//
+	// 装配顺序刻意的：策略引擎先建，网关持有同一个策略实例，
+	// 保证「HTTP 层判定」与「网关判定」用的是同一份策略快照 ——
+	// 两个实例会出现「后台看到的口子实际没生效」这种最难查的偏差。
+	egressPolicy := network.NewMemoryPolicyStore()
+	egressStore := network.NewMemoryTrafficStore()
+	egressGateway := network.NewHTTPGateway(network.GatewayConfig{
+		Policy:   egressPolicy,
+		Store:    egressStore,
+		Recorder: egressAuditRecorder{rec: auditRec},
+	})
+	egressSvc := network.NewService(network.ServiceConfig{
+		Policy:  egressPolicy,
+		Gateway: egressGateway,
+		Store:   egressStore,
+	})
+	egressH := network.NewHandler(egressSvc)
+
+	// 默认出口策略：先把「必须挡住」的口子显式登记出来。
+	//
+	// 注意这不是白名单 —— 没有匹配到任何 allow 条目**依然**拒绝。
+	// 这几条 deny 的价值在于给出可读的拒绝理由（命中具体规则而不是
+	// 落到「默认拒绝」），并防止将来某条宽泛的 allow 把内网地址捎带放开。
+	seedDefaultEgressRules(egressSvc, logger)
+
 	// Admin console (aggregate read-only view over the other modules)
 	adminSources := admin.Sources{
 		Agents:  adminAgentSource{svc: agentSvc},
+		Network: adminNetworkSource{svc: egressSvc},
 		Tasks:   adminTaskSource{mgr: taskSvc},
 		Monitor: adminMonitorSource{svc: monitorSvc},
 		Audit:   adminAuditSource{svc: auditSvc},
@@ -260,5 +291,8 @@ func New() *App {
 		AuditRec:     auditRec,
 		AdminSvc:     adminSvc,
 		AdminH:       adminH,
+		EgressSvc:    egressSvc,
+		EgressH:      egressH,
+		EgressPolicy: egressPolicy,
 	}
 }

@@ -71,6 +71,9 @@ func NewRouter(a *App) http.Handler {
 	// Audit log & operation replay
 	a.AuditH.RegisterRoutes(mux)
 
+	// Network egress routing (policy + gateway + outbound traffic audit)
+	a.EgressH.RegisterRoutes(mux)
+
 	// Admin console (aggregate view + static hosting for the React build)
 	a.AdminH.RegisterRoutes(mux)
 

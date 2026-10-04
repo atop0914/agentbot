@@ -26,6 +26,7 @@ const (
 	SectionAlerts      Section = "alerts"   // 未处理告警
 	SectionAudit       Section = "audit"    // 最近审计事件
 	SectionUsers       Section = "users"    // 用户与授权链（RBAC）
+	SectionNetwork     Section = "network"  // 网络出口（策略 + 出站流量）
 	SectionPlugins     Section = "plugins"  // 功能开关
 	SectionStaticAsset Section = "static"   // 静态资源挂载状态
 )
@@ -39,6 +40,7 @@ func AllSections() []Section {
 		SectionAlerts,
 		SectionAudit,
 		SectionUsers,
+		SectionNetwork,
 		SectionPlugins,
 		SectionStaticAsset,
 	}
@@ -65,6 +67,7 @@ type Snapshot struct {
 	Alerts      *AlertDigest       `json:"alerts,omitempty"`
 	Audit       *AuditDigest       `json:"audit,omitempty"`
 	Users       *UserDigest        `json:"users,omitempty"`
+	Network     *NetworkSummary    `json:"network,omitempty"`
 	Plugins     *PluginDigest      `json:"plugins,omitempty"`
 	Static      *StaticMountStatus `json:"static,omitempty"`
 	Errors      map[string]string  `json:"errors,omitempty"`
@@ -291,6 +294,13 @@ const (
 	MaxRecentLimit     = 200
 	// DefaultMonitorWindow 是 agents 分区监控摘要的默认时间窗。
 	DefaultMonitorWindow = 30 * time.Minute
+	// DefaultNetworkWindow 是 network 分区出站流量摘要的默认时间窗。
+	//
+	// 比监控窗口长（24h 对 30m）：外联异常的特征是「低频但持续」，
+	// 只看半小时会漏掉已经发生的横向探测。
+	DefaultNetworkWindow = 24 * time.Hour
+	// DefaultNetworkDomains 是 network 分区携带的域名条数上限。
+	DefaultNetworkDomains = 5
 )
 
 // Normalize 填充默认值并把 RecentLimit 收敛到合法区间。
@@ -352,6 +362,60 @@ type Sources struct {
 	Audit   AuditSource
 	Users   UserSource
 	Authz   AuthzSource
+	// Network 为 nil 时 network 分区被标记 unavailable，不影响其余分区。
+	Network NetworkSource
+}
+
+// NetworkSource 提供出口策略计数与出站流量摘要，由 internal/network.Service 适配。
+//
+// 与 MonitorSource 同一套设计：把它单独定义成一个窄接口，
+// 让 admin 包不依赖 network 的模型，同时保留「分区独立降级」的能力。
+type NetworkSource interface {
+	// Summarize 返回控制台 network 分区需要的摘要。
+	//
+	// 实现应尽力而为：策略计数与流量统计各自失败时只标记 Degraded，
+	// 而不是返回 error 让整个分区消失 —— 因为「出口策略一条都没配」
+	// 恰恰是需要被看见的状态。
+	Summarize(ctx context.Context, window time.Duration) (*NetworkSummary, error)
+}
+
+// NetworkSummary 是 network 分区的摘要视图。
+type NetworkSummary struct {
+	Window      string    `json:"window"`
+	GeneratedAt time.Time `json:"generated_at"`
+	// TotalRules / AllowRules / DenyRules 是出口策略条数。
+	//
+	// 分开暴露 allow / deny 而不是只给总数：控制台要能一眼回答
+	// 「这部署里出口开了几个口子」。
+	TotalRules int `json:"total_rules"`
+	AllowRules int `json:"allow_rules"`
+	DenyRules  int `json:"deny_rules"`
+
+	TotalRequests      int   `json:"total_requests"`
+	AllowedRequests    int   `json:"allowed_requests"`
+	BlockedRequests    int   `json:"blocked_requests"`
+	FailedRequests     int   `json:"failed_requests"`
+	DistinctDomains    int   `json:"distinct_domains"`
+	SuspiciousRequests int   `json:"suspicious_requests"`
+	TotalBytes         int64 `json:"total_bytes"`
+
+	// TopDomains 是请求数最高的外联目标；SuspiciousDomains 是命中启发式的目标。
+	TopDomains        []NetworkDomainView `json:"top_domains"`
+	SuspiciousDomains []NetworkDomainView `json:"suspicious_domains"`
+
+	// Degraded 为 true 时说明部分数据取数失败，错误细节见 Errors。
+	Degraded bool              `json:"degraded"`
+	Errors   map[string]string `json:"errors,omitempty"`
+}
+
+// NetworkDomainView 是网络分区里的域名视图（字段是控制台要展示的最小子集）。
+type NetworkDomainView struct {
+	Domain     string   `json:"domain"`
+	Requests   int      `json:"requests"`
+	Blocked    int      `json:"blocked"`
+	Bytes      int64    `json:"bytes"`
+	Suspicious bool     `json:"suspicious"`
+	Reasons    []string `json:"reasons,omitempty"`
 }
 
 // AgentSource 由 internal/agent.Service 满足。
