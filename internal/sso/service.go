@@ -123,7 +123,8 @@ func (s *MemorySessionStore) Take(_ context.Context, state string) (*Session, er
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.gcLocked()
+	// 刻意不在这里 gcLocked()（见 gcLocked 的注释）：
+	// 过期会话要能被取到并报出 ErrSessionExpired，而不是伪装成伪造 state。
 	sess, ok := s.sessions[state]
 	if !ok {
 		// 未知 state：可能是伪造，也可能是重放已用过的 state。
@@ -144,6 +145,14 @@ func (s *MemorySessionStore) Len() int {
 }
 
 // gcLocked 清理过期会话。调用方必须持锁。
+//
+// 注意 GC 与 Take 的先后顺序：Take **不做** GC，只在 Save 时清理。
+//
+// 原因是语义而不是性能：如果 Take 先清理再查找，一个「确实发出去过、
+// 但已过期」的 state 会退化成 ErrInvalidState，与「伪造的 state」
+// 无法区分。运维看到的现象是「用户点登录晚了两分钟就一直报 CSRF 失败」，
+// 而真正的原因（会话超时）被错误分类掩盖了。让 Take 能拿到已过期的会话，
+// 才能给出 ErrSessionExpired 这个准确的诊断。
 func (s *MemorySessionStore) gcLocked() {
 	now := s.now()
 	for k, sess := range s.sessions {
