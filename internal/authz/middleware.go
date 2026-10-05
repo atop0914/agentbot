@@ -282,6 +282,38 @@ func DefaultRouteTable() *RouteTable {
 		{Method: http.MethodGet, Pattern: "/api/v1/network/stats", Action: role.PermAgentRead},
 		{Method: http.MethodGet, Pattern: "/api/v1/network/summary", Action: role.PermAgentRead},
 
+		// 多租户（Day 27）：租户生命周期 + 成员 + 资源边界自查。
+		//
+		// 权限映射的取舍：
+		//   - 建租户 / 暂停租户 = 决定「谁能拥有资源」，是平台级元权限
+		//     → role:manage（与角色矩阵同级，因为它们都能改变权限边界）；
+		//   - 成员增删 = 改变租户的可见范围 → user:update（与用户管理同级）；
+		//   - 读租户/成员/资源清单 = 观测面 → user:read。
+		//
+		// 集合路径 /api/v1/tenants 无尾斜杠，前缀规则覆盖不到；
+		// /{id}/status、/{id}/members、/{id}/resources、/current 同理，
+		// 全部必须显式登记 —— 这正是 Day 24 踩过的坑。
+		{Method: http.MethodGet, Pattern: "/api/v1/tenants", Action: role.PermUserRead},
+		{Method: http.MethodPost, Pattern: "/api/v1/tenants", Action: role.PermRoleManage},
+		{Method: http.MethodGet, Pattern: "/api/v1/tenants/", Action: role.PermUserRead},
+		{Method: http.MethodPost, Pattern: "/api/v1/tenants/status", Action: role.PermRoleManage, Suffix: true},
+		{Method: http.MethodGet, Pattern: "/api/v1/tenants/current", Action: role.PermUserRead, Suffix: true},
+		{Method: http.MethodGet, Pattern: "/api/v1/tenants/members", Action: role.PermUserRead, Suffix: true},
+		{Method: http.MethodPost, Pattern: "/api/v1/tenants/members", Action: role.PermUserUpdate, Suffix: true},
+		{Method: http.MethodDelete, Pattern: "/api/v1/tenants/members/", Action: role.PermUserUpdate},
+		{Method: http.MethodGet, Pattern: "/api/v1/tenants/resources", Action: role.PermUserRead, Suffix: true},
+
+		// 企业 SSO（Day 27）：登录入口本身是公开的。
+		//
+		// 这三条必须显式登记为 Public —— 中间件对**未登记**路径的默认行为
+		// 是 403，而不是「公开」。忘记登记会让登录入口变成 403，
+		// 表现为「SSO 按钮点了没反应」，最难排查的一类故障。
+		// 保护它们的是协议本身（state / nonce / PKCE）与「未配置即 503」。
+		{Method: http.MethodPost, Pattern: "/api/v1/sso/authorize", Public: true},
+		{Method: http.MethodGet, Pattern: "/api/v1/sso/callback", Public: true},
+		{Method: http.MethodPost, Pattern: "/api/v1/sso/callback", Public: true},
+		{Method: http.MethodGet, Pattern: "/api/v1/sso/status", Public: true},
+
 		// 角色与权限矩阵（元权限）
 		{Method: http.MethodGet, Pattern: "/api/v1/roles", Action: role.PermRoleManage},
 		{Method: http.MethodGet, Pattern: "/api/v1/roles/", Action: role.PermRoleManage},

@@ -51,6 +51,11 @@ func (m *JWTManager) GenerateTokenPair(claims *Claims) (*TokenPair, error) {
 		"exp":      accessExpiry.Unix(),
 		"type":     "access",
 	}
+	// 租户声明只在非空时写入：写一个空值会让「未绑定租户」与
+	// 「绑定到名为空的租户」在日志里无法区分。
+	if claims.TenantID != "" {
+		accessClaims["tenant_id"] = claims.TenantID
+	}
 
 	accessToken := jwt.NewWithClaims(jwt.SigningMethodHS256, accessClaims)
 	accessTokenStr, err := accessToken.SignedString([]byte(m.config.Secret))
@@ -117,6 +122,7 @@ func (m *JWTManager) ValidateAccessToken(tokenStr string) (*Claims, error) {
 	claims.Username, _ = mapClaims["username"].(string)
 	claims.Email, _ = mapClaims["email"].(string)
 	claims.Role, _ = mapClaims["role"].(string)
+	claims.TenantID, _ = mapClaims["tenant_id"].(string)
 
 	return claims, nil
 }

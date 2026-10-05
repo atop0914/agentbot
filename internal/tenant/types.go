@@ -144,10 +144,10 @@ type Member struct {
 type ResourceType string
 
 const (
-	ResourceAgent      ResourceType = "agent"
-	ResourceTask       ResourceType = "task"
-	ResourceAudit      ResourceType = "audit"
-	ResourceEgressRule ResourceType = "egress_rule"
+	ResourceAgent       ResourceType = "agent"
+	ResourceTask        ResourceType = "task"
+	ResourceAudit       ResourceType = "audit"
+	ResourceEgressRule  ResourceType = "egress_rule"
 	ResourceEnvironment ResourceType = "environment"
 )
 
@@ -187,14 +187,14 @@ func (o Owner) Matches(tenant ID) bool {
 
 // Stats 是租户维度的汇总，供管理后台展示。
 type Stats struct {
-	GeneratedAt   time.Time        `json:"generated_at"`
-	TotalTenants  int              `json:"total_tenants"`
-	ActiveTenants int              `json:"active_tenants"`
-	Suspended     int              `json:"suspended"`
-	TotalMembers  int              `json:"total_members"`
-	ByPlan        map[string]int   `json:"by_plan"`
-	Resources     map[string]int   `json:"resources"`
-	Scoped        bool             `json:"scoped"`
+	GeneratedAt   time.Time      `json:"generated_at"`
+	TotalTenants  int            `json:"total_tenants"`
+	ActiveTenants int            `json:"active_tenants"`
+	Suspended     int            `json:"suspended"`
+	TotalMembers  int            `json:"total_members"`
+	ByPlan        map[string]int `json:"by_plan"`
+	Resources     map[string]int `json:"resources"`
+	Scoped        bool           `json:"scoped"`
 	// TenantID 非空时表示这是一份「单租户视角」的统计。
 	TenantID ID `json:"tenant_id,omitempty"`
 }

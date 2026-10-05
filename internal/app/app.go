@@ -21,7 +21,9 @@ import (
 	"github.com/atop0914/agentbot/internal/monitor"
 	"github.com/atop0914/agentbot/internal/network"
 	"github.com/atop0914/agentbot/internal/role"
+	"github.com/atop0914/agentbot/internal/sso"
 	"github.com/atop0914/agentbot/internal/template"
+	"github.com/atop0914/agentbot/internal/tenant"
 	"github.com/atop0914/agentbot/internal/terminal"
 	"github.com/atop0914/agentbot/internal/user"
 	"github.com/atop0914/agentbot/internal/websocket"
@@ -71,6 +73,12 @@ type App struct {
 	EgressSvc    network.Service
 	EgressH      *network.Handler
 	EgressPolicy *network.MemoryPolicyStore
+	// 多租户隔离（Day 27）
+	TenantSvc tenant.Service
+	TenantH   *tenant.Handler
+	// 企业 SSO / OIDC（Day 27）
+	SSOSvc sso.Service
+	SSOH   *sso.Handler
 }
 
 // New creates a new App with all in-memory services wired up.
@@ -242,6 +250,31 @@ func New() *App {
 	// 落到「默认拒绝」），并防止将来某条宽泛的 allow 把内网地址捎带放开。
 	seedDefaultEgressRules(egressSvc, logger)
 
+	// 多租户隔离（Day 27）：租户 + 成员 + 资源归属边界。
+	//
+	// 装配顺序刻意的：租户服务必须早于任何「会登记资源归属」的业务动作，
+	// 否则第一轮创建的 Agent 会没有归属 —— 而「没有归属」在隔离语义下
+	// 等于「谁都看不到」，看起来和「创建失败」一模一样，最难排查。
+	tenantStore := tenant.NewMemoryStore()
+	tenantSvc := tenant.NewService(tenantStore)
+	tenantH := tenant.NewHandler(tenantSvc)
+	tenantH.SetIdentityResolver(tenantIdentityFromRequest)
+
+	// 企业 SSO（OIDC，Day 27）。
+	//
+	// 默认**不配置**：没有企业 IdP 的部署应该看到 503 而不是一个
+	// 「看起来能用、实际谁都能进」的登录入口。配置由部署方显式提供
+	// （环境变量 / 配置文件），这里给出的是安全默认。
+	ssoSvc := sso.NewService(sso.ServiceConfig{
+		Users:   userDirectoryAdapter{svc: userSvc},
+		Binding: sso.BindingStrict,
+	})
+	ssoH := sso.NewHandler(ssoSvc)
+	ssoH.SetSessionIssuer(ssoSessionIssuer(authSvc, tenantSvc))
+	ssoH.SetTenantBinder(func(r *http.Request, acct *sso.Account, tenantID string) error {
+		return bindSSOToTenant(r.Context(), tenantSvc, acct.LocalUserID, tenantID)
+	})
+
 	// Admin console (aggregate read-only view over the other modules)
 	adminSources := admin.Sources{
 		Agents:  adminAgentSource{svc: agentSvc},
@@ -294,5 +327,9 @@ func New() *App {
 		EgressSvc:    egressSvc,
 		EgressH:      egressH,
 		EgressPolicy: egressPolicy,
+		TenantSvc:    tenantSvc,
+		TenantH:      tenantH,
+		SSOSvc:       ssoSvc,
+		SSOH:         ssoH,
 	}
 }

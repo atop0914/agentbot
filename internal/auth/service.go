@@ -138,6 +138,24 @@ func (s *Service) RefreshToken(refreshToken string) (*TokenPair, error) {
 	return s.jwtManager.GenerateTokenPair(claims)
 }
 
+// IssueTokens 直接为给定的 claims 签发 Token 对。
+//
+// 存在的理由：SSO 登录走的是**外部**身份提供方，登录成功时并不经过
+// Register/Login；若只能从这两个入口签发令牌，SSO 用户就只能被迫
+// 「拿一个随机密码再走一遍 Login」，既多一次密码哈希开销，也让
+// 「SSO 用户没有密码」这个事实变得不可表达。
+//
+// 安全前提：调用方必须已经把 claims 中的每一个字段都绑定到**校验过的**
+// 凭据上（sso 包校验完 ID Token 才拿到邮箱与 subject）。这里的
+// TenantID 尤其如此 —— 它必须在写进令牌之前完成成员校验，否则
+// 「换个 URL 参数就换个租户」。
+func (s *Service) IssueTokens(claims *Claims) (*TokenPair, error) {
+	if claims == nil || strings.TrimSpace(claims.UserID) == "" {
+		return nil, fmt.Errorf("cannot issue a token without a user id")
+	}
+	return s.jwtManager.GenerateTokenPair(claims)
+}
+
 // ValidateAccessToken 验证 Access Token
 func (s *Service) ValidateAccessToken(token string) (*Claims, error) {
 	// 检查黑名单

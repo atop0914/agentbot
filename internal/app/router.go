@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/atop0914/agentbot/internal/authz"
+	"github.com/atop0914/agentbot/internal/tenant"
 )
 
 // NewRouter creates the HTTP handler with all routes wired.
@@ -74,6 +75,12 @@ func NewRouter(a *App) http.Handler {
 	// Network egress routing (policy + gateway + outbound traffic audit)
 	a.EgressH.RegisterRoutes(mux)
 
+	// Multi-tenant isolation (tenant lifecycle + members + resource ownership)
+	a.TenantH.RegisterRoutes(mux)
+
+	// Enterprise SSO / OIDC (authorize + callback + status)
+	a.SSOH.RegisterRoutes(mux)
+
 	// Admin console (aggregate view + static hosting for the React build)
 	a.AdminH.RegisterRoutes(mux)
 
@@ -103,6 +110,21 @@ func NewRouter(a *App) http.Handler {
 		} else {
 			handler = authzMW.Authorize(handler)
 		}
+	}
+
+	// 租户作用域中间件挂在最内层（最靠近业务 handler）：
+	//
+	//  1. 它必须在认证之后 —— 租户身份取自验签过的 claims，
+	//     挂在认证外层会永远读不到 claims；
+	//  2. required=false：无租户身份的请求仍然放行（公开路由与
+	//     「已登录但未绑定租户」的过渡态），由业务层用
+	//     tenant.RequireScope 决定哪些入口必须处于作用域内。
+	//     这样做的代价是「业务层可能漏挂」，收益是旧的、尚未迁移的
+	//     路由不会因为新增中间件而整体 401 —— 迁移期这两种失败模式的
+	//     取舍是刻意的：整体不可用比逐步收紧更容易被误当成故障排查掉。
+	if a.TenantSvc != nil {
+		tenantMW := tenant.NewMiddleware(a.TenantSvc, tenantIdentityFromRequest, false)
+		handler = tenantMW.Handler(handler)
 	}
 
 	return handler

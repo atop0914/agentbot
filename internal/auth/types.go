@@ -10,6 +10,12 @@ type Claims struct {
 	Username string `json:"username"`
 	Email    string `json:"email"`
 	Role     string `json:"role"`
+	// TenantID 是该会话绑定的租户。
+	//
+	// 放在**签名过的** claims 里而不是请求头/请求体里是多租户隔离的前提：
+	// 客户端能改的字段永远不能决定「我是哪个租户」。空值表示该会话未绑定
+	// 租户，此时平台按「无租户作用域」处理，业务路由一律拒绝。
+	TenantID string `json:"tenant_id,omitempty"`
 }
 
 // TokenPair Token 对
