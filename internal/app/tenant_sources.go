@@ -30,10 +30,21 @@ func tenantIdentityFromRequest(r *http.Request) (tenant.ID, string, bool) {
 	if userID == "" {
 		return tenant.None, "", false
 	}
-	// 租户可为空：这表示「已认证但未绑定租户」。
-	// 此时中间件按 required=false 放行、不注入作用域，由 business 路由
-	// 自己决定是否要求作用域（tenant.RequireScope）。
-	return tenant.ID(strings.TrimSpace(claims.TenantID)), userID, true
+	// 租户可为空：这表示「已认证但未按租户绑定」（平台管理员，
+	// 或尚未加入任何租户的新用户）。
+	//
+	// 这种情况下 ok 返回 **false**：让中间件按「无作用域」放行，
+	// 而不是拿一个空租户去 Resolve（那一定失败，并把
+	// 「平台管理员建租户」这类合法操作挡在 401 外）。
+	//
+	// 这两条路径的区别是刻意的：
+	//   ok=false + TenantID 为空 → 无作用域，业务层用 RequireScope 决定；
+	//   ok=true  + TenantID 非空 → 解析并注入租户作用域。
+	tenantID := tenant.ID(strings.TrimSpace(claims.TenantID))
+	if tenantID == tenant.None {
+		return tenant.None, userID, false
+	}
+	return tenantID, userID, true
 }
 
 // tenantUserDirectory 把 internal/user 适配成 sso.UserDirectory。

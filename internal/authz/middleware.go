@@ -38,6 +38,17 @@ type RouteRule struct {
 	// 用于 /api/v1/users/{id}/status 这类「中间带 ID、尾部是固定子资源名」的
 	// 路由：前缀匹配无法表达，因为 ID 段长度不定。
 	Suffix bool
+	// Namespace 限定该规则只在某个路径**前缀**下生效（与前缀匹配配合）。
+	//
+	// 存在的理由：单靠 Suffix 表达不了「尾部同一、但命名空间不同」的区分。
+	// `/users/{id}/status` 与 `/tenants/{id}/status` 的尾部完全一样，
+	// 等长的后缀规则之间无法确定谁该胜出 —— 实测表现为「暂停租户」
+	// 被用户的启停规则接走，权限从 role:manage 悄悄降级成 user:activate。
+	//
+	// 用 Namespace 把规则钉在各自的命名空间内，竞争就不存在了：
+	// 它比单纯「按长度排序」更贴近语义（我要的是「租户命名空间下的
+	// status」），也更不容易在新增路由时被误伤。
+	Namespace string
 }
 
 // RouteTable 是路由权限表的查询结构。
@@ -60,52 +71,70 @@ func (t *RouteTable) Lookup(method, path string) (RouteRule, bool) {
 	if t == nil {
 		return RouteRule{}, false
 	}
-	// 先精确
-	for _, r := range t.rules {
-		if r.Pattern == "" || strings.HasSuffix(r.Pattern, "/") {
-			continue
-		}
-		if r.Pattern == path && methodMatches(r.Method, method) {
-			return r, true
-		}
+	// 匹配规则：精确 > 后缀 > 前缀，各类别内「更具体者胜」。
+	//
+	// ⚠️ 为什么不是单纯的「模式越长越具体」（实测踩过）：
+	// `/api/v1/users/`（前缀）比 `/status`（后缀）长得多，但它对
+	// 「改的是 status 还是 profile」一无所知。若按长度排序，
+	// PUT /users/{id}/status 会从 user:activate 退化成 user:update ——
+	// 一次实打实的权限放宽。所以类别优先级必须高于长度：
+	//
+	//	精确匹配  最高：路径完全相等，没有解释空间；
+	//	后缀匹配  次高：钉住尾部子资源名（/status、/roles），
+	//	                尾部正是「这个请求想做什么」的所在；
+	//	前缀匹配  最低：只约束路径开头，尾部是什么完全不管。
+	//
+	// Namespace 是后缀规则内部的**作用域限定**：尾部相同但命名空间不同的
+	// 两条规则（用户 /status 与租户 /status）靠它区分，避免等长竞争
+	// 让胜负取决于登记顺序。
+	type match struct {
+		rule RouteRule
+		spec int
 	}
-	// 再后缀（最长的后缀优先）。必须在通配前缀之前判定，否则
-	// /api/v1/users/{id}/status 会被 /api/v1/users/ 前缀规则抢走。
-	var bestSuffix RouteRule
-	bestSuffixLen := -1
-	for _, r := range t.rules {
-		if !r.Suffix {
-			continue
+	var best *match
+	consider := func(r RouteRule, spec int) {
+		if !methodMatches(r.Method, method) {
+			return
 		}
-		if !strings.HasSuffix(path, r.Pattern) || !methodMatches(r.Method, method) {
-			continue
+		if r.Namespace != "" && !strings.HasPrefix(path, r.Namespace) {
+			return
 		}
-		if len(r.Pattern) > bestSuffixLen {
-			bestSuffix = r
-			bestSuffixLen = len(r.Pattern)
+		if best == nil || spec > best.spec || (spec == best.spec && isMoreSpecific(r, best.rule)) {
+			cp := r
+			best = &match{rule: cp, spec: spec}
 		}
-	}
-	if bestSuffixLen >= 0 {
-		return bestSuffix, true
 	}
 
-	// 再前缀（最长的前缀优先，保证 /api/v1/users/x/roles 不会被 /api/v1/users/ 抢走）
-	var best RouteRule
-	bestLen := -1
 	for _, r := range t.rules {
-		if !strings.HasSuffix(r.Pattern, "/") {
+		if r.Pattern == "" {
 			continue
 		}
-		if !strings.HasPrefix(path, r.Pattern) || !methodMatches(r.Method, method) {
-			continue
-		}
-		if len(r.Pattern) > bestLen {
-			best = r
-			bestLen = len(r.Pattern)
+		switch {
+		case r.Suffix:
+			if !strings.HasSuffix(path, r.Pattern) {
+				continue
+			}
+			// 带 Namespace 的后缀规则比裸后缀更具体：它同时约束了
+			// 命名空间与尾部动作，语义更强。
+			spec := 3000 + len(r.Pattern)
+			if r.Namespace != "" {
+				spec += 500 + len(r.Namespace)
+			}
+			consider(r, spec)
+		case strings.HasSuffix(r.Pattern, "/"):
+			if !strings.HasPrefix(path, r.Pattern) {
+				continue
+			}
+			consider(r, 1000+len(r.Pattern))
+		default:
+			if r.Pattern != path {
+				continue
+			}
+			consider(r, 5000+len(r.Pattern))
 		}
 	}
-	if bestLen >= 0 {
-		return best, true
+	if best != nil {
+		return best.rule, true
 	}
 	return RouteRule{}, false
 }
@@ -131,6 +160,27 @@ func methodMatches(ruleMethod, actual string) bool {
 		return true
 	}
 	return strings.EqualFold(ruleMethod, actual)
+}
+
+// isMoreSpecific 在具体度相同时给出确定的排序。
+//
+// 同分意味着两条规则长度相同（例如两个等长的后缀），此时必须有**确定性**
+// 的胜者：否则结果会依赖 rules 切片的顺序，而那个顺序又取决于登记顺序 ——
+// 一个「加了一行无关规则，权限判定就变了」的隐蔽陷阱。
+//
+// 排序键（依次）：
+//  1. Public 优先：公开规则显式声明了「无需权限」，让它胜出比让它被
+//     一条需要权限的等长规则覆盖更安全（后者会把公开端点变成 403）；
+//  2. 需权限者中，Deny 语义更强的先胜 —— 这里用不了「拒绝」概念，
+//     退化为按 Pattern 字典序，保证任何输入下结果唯一。
+func isMoreSpecific(a, b RouteRule) bool {
+	if a.Public != b.Public {
+		return a.Public
+	}
+	if a.Pattern != b.Pattern {
+		return a.Pattern < b.Pattern
+	}
+	return a.Method < b.Method
 }
 
 // DefaultRouteTable 返回 AgentBot 的默认路由权限表。
@@ -290,24 +340,45 @@ func DefaultRouteTable() *RouteTable {
 		//   - 成员增删 = 改变租户的可见范围 → user:update（与用户管理同级）；
 		//   - 读租户/成员/资源清单 = 观测面 → user:read。
 		//
-		// 集合路径 /api/v1/tenants 无尾斜杠，前缀规则覆盖不到；
-		// /{id}/status、/{id}/members、/{id}/resources、/current 同理，
-		// 全部必须显式登记 —— 这正是 Day 24 踩过的坑。
+		// ⚠️ 踩坑记录（实测）：
+		//  1. `/api/v1/tenants/{id}/status` 若用 **Suffix** 规则登记，
+		//     会被既有的用户状态规则 `{Pattern: "/status", Suffix: true}`
+		//     抢走（两者后缀相同，取最长后缀时长度一样，先登记者胜），
+		//     结果是「暂停租户」实际要 `user:activate` 权限 —— 一次典型
+		//     的权限错配，而且不报错、只是判定成了另一个动作。
+		//     规避方式：租户子资源一律用**更长的前缀**登记，不用 Suffix。
+		//  2. `/tenants/{id}/members`、`/tenants/{id}/resources` 会被
+		//    泛化的 `/api/v1/tenants/` 前缀规则接住 —— 能跑通，但那是
+		//     巧合而不是意图（将来有人放宽前缀规则，这两条就会跟着变松）。
+		//     显式登记让意图可读、可审计。
 		{Method: http.MethodGet, Pattern: "/api/v1/tenants", Action: role.PermUserRead},
 		{Method: http.MethodPost, Pattern: "/api/v1/tenants", Action: role.PermRoleManage},
-		{Method: http.MethodGet, Pattern: "/api/v1/tenants/", Action: role.PermUserRead},
-		{Method: http.MethodPost, Pattern: "/api/v1/tenants/status", Action: role.PermRoleManage, Suffix: true},
-		{Method: http.MethodGet, Pattern: "/api/v1/tenants/current", Action: role.PermUserRead, Suffix: true},
-		{Method: http.MethodGet, Pattern: "/api/v1/tenants/members", Action: role.PermUserRead, Suffix: true},
-		{Method: http.MethodPost, Pattern: "/api/v1/tenants/members", Action: role.PermUserUpdate, Suffix: true},
-		{Method: http.MethodDelete, Pattern: "/api/v1/tenants/members/", Action: role.PermUserUpdate},
-		{Method: http.MethodGet, Pattern: "/api/v1/tenants/resources", Action: role.PermUserRead, Suffix: true},
-
-		// 企业 SSO（Day 27）：登录入口本身是公开的。
+		{Method: http.MethodGet, Pattern: "/api/v1/tenants/current", Action: role.PermUserRead},
+		// 状态变更（暂停/恢复）：用**更长的后缀** /tenants/{id}/status 的尾部模式。
 		//
-		// 这三条必须显式登记为 Public —— 中间件对**未登记**路径的默认行为
-		// 是 403，而不是「公开」。忘记登记会让登录入口变成 403，
-		// 表现为「SSO 按钮点了没反应」，最难排查的一类故障。
+		// 为什么必须用后缀而不是泛化前缀 `/api/v1/tenants/`：
+		// 泛化前缀会把「读成员」「读资源」「删租户」一并收进 role:manage，
+		// 权限过宽；而后缀正好钉住「改状态」这个动作。
+		// 与用户状态规则的区分靠模式长度：本规则的 Pattern 更长，
+		// 因此在同为后缀类别时胜出（见 Lookup 的具体度说明）。
+		// 状态变更（暂停/恢复）：命名空间 + 尾部动作双重限定。
+		//
+		// Namespace 是关键：裸后缀 `/status` 与用户的启停规则等长，
+		// 谁胜出取决于登记顺序 —— 实测表现为「暂停租户」被 user:activate
+		// 接走，一次不报错的权限错配。加上命名空间后两条规则不再竞争。
+		{Method: http.MethodPost, Pattern: "/status", Namespace: "/api/v1/tenants/", Action: role.PermRoleManage, Suffix: true},
+		// 删除租户：只读兜底前缀覆盖不到 DELETE，单独登记。
+		{Method: http.MethodDelete, Pattern: "/api/v1/tenants/", Action: role.PermRoleManage},
+		// 只读兜底：租户详情、成员清单、资源清单。
+		// （/tenants/{id}/status 与 DELETE 已由上面的后缀规则接管。）
+		{Method: http.MethodGet, Pattern: "/api/v1/tenants/", Action: role.PermUserRead},
+		{Method: http.MethodPost, Pattern: "/api/v1/tenants/", Action: role.PermUserUpdate, Suffix: false},
+
+		// SSO 入口（Day 27）：登录本身公开。
+		//
+		// 必须显式登记为 Public —— 中间件对**未登记**路径的默认行为是 403，
+		// 而不是「公开」。忘记登记会让登录入口变成 403，表现为
+		// 「SSO 按钮点了没反应」，属于最难排查的一类故障。
 		// 保护它们的是协议本身（state / nonce / PKCE）与「未配置即 503」。
 		{Method: http.MethodPost, Pattern: "/api/v1/sso/authorize", Public: true},
 		{Method: http.MethodGet, Pattern: "/api/v1/sso/callback", Public: true},
@@ -334,12 +405,12 @@ func DefaultRouteTable() *RouteTable {
 		// 用户子资源：启用/停用比「改用户」更敏感，单列权限，避免拿到
 		// user:update 就能停用他人账号。角色分配读写同样单列。
 		// 注意：这些规则必须带方法，否则会覆盖上面的 GET 详情规则。
-		{Method: http.MethodGet, Pattern: "/status", Suffix: true, Action: role.PermUserRead, TargetType: "user"},
-		{Method: http.MethodPut, Pattern: "/status", Suffix: true, Action: role.PermUserActivate, TargetType: "user"},
-		{Method: http.MethodPost, Pattern: "/status", Suffix: true, Action: role.PermUserActivate, TargetType: "user"},
-		{Method: http.MethodGet, Pattern: "/roles", Suffix: true, Action: role.PermUserRead, TargetType: "user"},
-		{Method: http.MethodPost, Pattern: "/roles", Suffix: true, Action: role.PermRoleAssign, TargetType: "user"},
-		{Method: http.MethodDelete, Pattern: "/roles", Suffix: true, Action: role.PermRoleRevoke, TargetType: "user"},
+		{Method: http.MethodGet, Pattern: "/status", Namespace: "/api/v1/users/", Suffix: true, Action: role.PermUserRead, TargetType: "user"},
+		{Method: http.MethodPut, Pattern: "/status", Namespace: "/api/v1/users/", Suffix: true, Action: role.PermUserActivate, TargetType: "user"},
+		{Method: http.MethodPost, Pattern: "/status", Namespace: "/api/v1/users/", Suffix: true, Action: role.PermUserActivate, TargetType: "user"},
+		{Method: http.MethodGet, Pattern: "/roles", Namespace: "/api/v1/users/", Suffix: true, Action: role.PermUserRead, TargetType: "user"},
+		{Method: http.MethodPost, Pattern: "/roles", Namespace: "/api/v1/users/", Suffix: true, Action: role.PermRoleAssign, TargetType: "user"},
+		{Method: http.MethodDelete, Pattern: "/roles", Namespace: "/api/v1/users/", Suffix: true, Action: role.PermRoleRevoke, TargetType: "user"},
 		{Method: http.MethodGet, Pattern: "/api/v1/authorizations", Action: role.PermRoleManage},
 		{Method: http.MethodPost, Pattern: "/api/v1/authorizations", Action: role.PermRoleAssign},
 		{Method: http.MethodDelete, Pattern: "/api/v1/authorizations", Action: role.PermRoleRevoke},

@@ -98,6 +98,29 @@ func NewRouter(a *App) http.Handler {
 	// 认证不单独挂一层，而是作为 authz 的**内层**：只有路由表判定该路径需要
 	// 权限时，才要求 token 并解析 claims。若把 RequireAuth 挂在外层，连
 	// /api/v1/auth/register 这类公开路由都会被 401 拦掉。
+	//
+	// 租户作用域中间件。
+	//
+	// ⚠️ 顺序陷阱（实测踩过）：Go 的 `handler = mw(handler)` 是**由内向外**
+	// 叠加 —— 最后执行的那次赋值在最外层、最先执行。因此租户中间件必须在
+	// **authz/OptionalAuth 之前**完成包装，才能落在认证的**内层**，
+	// 从而读到 OptionalAuth 刚写进 context 的 claims。
+	//
+	// 第一版把它放在认证之后包装（也就是放到了最外层），结果是
+	// tenantIdentityFromRequest 永远读不到 claims，所有租户端点的
+	// 现象都是「authenticated tenant identity required」—— 看起来像
+	// 认证坏了，实际是中间件层序反了。
+	//
+	// required=false：无租户身份的请求仍然放行（公开路由与「已登录但未
+	// 绑定租户」的过渡态），由业务层用 tenant.RequireScope 决定哪些入口
+	// 必须处于作用域内。取舍是刻意的：旧路由不会因为新增中间件而整体
+	// 401（那种失败最容易被当成故障排查掉）。
+	if a.TenantSvc != nil {
+		tenantMW := tenant.NewMiddleware(a.TenantSvc, tenantIdentityFromRequest, false)
+		handler = tenantMW.Handler(handler)
+	}
+
+	// 权限与认证在租户作用域之外：claims 先被解析出来，租户层才能用。
 	if a.AuthzSvc != nil {
 		authzMW := authz.NewMiddleware(a.AuthzSvc, authz.DefaultRouteTable())
 		authzMW.ResolveSubject = authzSubjectFromRequest
@@ -110,21 +133,6 @@ func NewRouter(a *App) http.Handler {
 		} else {
 			handler = authzMW.Authorize(handler)
 		}
-	}
-
-	// 租户作用域中间件挂在最内层（最靠近业务 handler）：
-	//
-	//  1. 它必须在认证之后 —— 租户身份取自验签过的 claims，
-	//     挂在认证外层会永远读不到 claims；
-	//  2. required=false：无租户身份的请求仍然放行（公开路由与
-	//     「已登录但未绑定租户」的过渡态），由业务层用
-	//     tenant.RequireScope 决定哪些入口必须处于作用域内。
-	//     这样做的代价是「业务层可能漏挂」，收益是旧的、尚未迁移的
-	//     路由不会因为新增中间件而整体 401 —— 迁移期这两种失败模式的
-	//     取舍是刻意的：整体不可用比逐步收紧更容易被误当成故障排查掉。
-	if a.TenantSvc != nil {
-		tenantMW := tenant.NewMiddleware(a.TenantSvc, tenantIdentityFromRequest, false)
-		handler = tenantMW.Handler(handler)
 	}
 
 	return handler
