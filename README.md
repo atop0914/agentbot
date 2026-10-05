@@ -31,6 +31,8 @@ agentbot/
 │   ├── monitor/                # 健康监控 + 告警
 │   ├── audit/                  # 审计日志 + 操作回放
 │   ├── network/                # 网络出口路由（策略 / 网关 / 出站流量审计）
+│   ├── tenant/                 # 多租户隔离（租户 / 成员 / 资源归属边界）
+│   ├── sso/                    # 企业 SSO（OIDC 授权码流 + ID Token 校验）
 │   ├── admin/                  # 管理后台聚合视图 + 静态资源托管
 │   └── websocket/              # 实时通信
 ├── pkg/config/                 # 配置加载
@@ -102,6 +104,8 @@ POST   /api/v1/auth/login             登录
        /api/v1/monitor                 健康监控与告警
        /api/v1/audit                   审计日志查询/聚合/导出
        /api/v1/network                 出口策略 / 网关代理 / 出站流量审计
+       /api/v1/tenants                 租户 / 成员 / 资源边界自查
+       /api/v1/sso                     企业 SSO 登录（authorize / callback / status）
        /api/v1/admin                   管理后台配置 + 聚合视图
        /admin/*                        管理后台前端静态资源
        /api/v1/ws                      WebSocket 实时通道
@@ -115,7 +119,12 @@ POST   /api/v1/auth/login             登录
 - 新增模块需在 `internal/app/app.go` 装配，并在 `internal/app/router.go` 注册路由
 - 新增路由必须在 `internal/authz` 的路由权限表登记：**无尾斜杠的集合路径**
   （如 `/api/v1/network/rules`）不会被任何前缀规则覆盖，漏登记即 403
-- 安全边界类模块（出口策略、权限判定）一律 fail-closed：依赖不可用时拒绝而非放行
+- 安全边界类模块（出口策略、权限判定、租户隔离、SSO 校验）一律 fail-closed：
+  依赖不可用时拒绝而非放行
+- 租户身份只能来自**签名过的 JWT claims**，禁止从请求体 / query / 自定义 header 读取；
+  跨租户访问一律返回 404（与「不存在」同形），不用 403 —— 403 会泄漏 ID 是否存在
+- 权限表登记后缀规则时注意命名空间：`/users/{id}/status` 与 `/tenants/{id}/status`
+  尾部相同，必须用 `Namespace` 区分，否则会静默串用对方的权限动作
 
 ## License
 

@@ -222,6 +222,56 @@ Agent 能连上什么，就是它能泄露什么。出口层把「策略 + 网�
 | GET | `/network/stats?window=24h` | 出站流量聚合统计 |
 | GET | `/network/summary` | 后台「网络」分区摘要 |
 
+### 多租户 `/tenants`
+
+> 租户身份**只**来自签名过的 JWT `tenant_id` 声明。请求体、query、自定义 header
+> 里的租户标识一律被忽略 —— 否则多租户就退化成「改个字段就换租户」的 UI 特性。
+> 跨租户访问返回 **404**（与资源不存在同形），不返回 403，避免泄漏「这个 ID 存在」。
+
+| 方法 | 路径 | 说明 | 所需权限 |
+|------|------|------|----------|
+| GET | `/tenants` | 列出全部租户（支持 `?stats=1` 返回汇总） | `user:read` |
+| POST | `/tenants` | 创建租户（创建者自动成为成员） | `role:manage` |
+| GET | `/tenants/current` | 当前请求所属租户（服务端视角自查） | `user:read` |
+| GET | `/tenants/{id}` | 租户详情 | `user:read` |
+| POST | `/tenants/{id}/status` | 暂停 / 恢复租户（body: `{"status":"suspended"}`） | `role:manage` |
+| GET | `/tenants/{id}/members` | 成员列表 | `user:read` |
+| POST | `/tenants/{id}/members` | 添加成员（幂等，body: `{"user_id":"..."}`） | `user:update` |
+| DELETE | `/tenants/{id}/members/{uid}` | 移除成员 | `user:update` |
+| GET | `/tenants/{id}/resources` | 资源归属清单（自查边界） | `user:read` |
+
+配额按套餐：`free`（5 Agent / 10 成员 / 10 出口规则）、`team`（50/100/100）、
+`enterprise`（500/1000/500）。超限返回 `409`。
+
+### 企业 SSO `/sso`
+
+> OIDC 授权码流 + PKCE(S256)。三条路由**公开**（登录本身不需要先登录），
+> 保护它们的是协议本身（`state` 一次性 / `nonce` 防重放 / PKCE 防授权码拦截）
+> 以及「未配置即 503」—— **未配置绝不等于放行**。
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/sso/authorize` | 发起登录，返回授权 URL（含 state / nonce / PKCE challenge） |
+| GET/POST | `/sso/callback` | 处理 IdP 回调（`code` + `state`），可带 `tenant_id` 绑定租户 |
+| GET | `/sso/status` | 返回 `{configured, provider}`，供前端决定是否展示 SSO 入口 |
+
+ID Token 校验链（任一环不过即拒绝）：JWS 结构 → `alg` 白名单 → 签名验签 →
+`iss` 精确匹配 → `aud` 含 ClientID → `exp`/`nbf`/`iat`（含偏移）→ `nonce` 回带 →
+`sub` 非空 → `email_verified` 为真。
+
+JWKS 缓存默认 1 小时；**`kid` 未命中时强制刷新一次**，用于应对 IdP 密钥轮转
+（不刷新会导致轮转后全员登录失败；回落到旧密钥则等于继续信任已废弃密钥）。
+
+账号绑定策略必须显式配置：
+
+| 策略 | 行为 |
+|------|------|
+| `strict`（默认） | 邮箱无本地账号时**拒绝**，返回 `409`。绝不静默创建或合并 |
+| `auto_create` | 邮箱无本地账号时自动创建（仍要求 `email_verified`） |
+
+`email_verified` 为 false 时一律拒绝绑定 —— 否则「在 IdP 注册一个同邮箱账号」
+就能接管本地已有账号。
+
 ### 策略条目
 
 ```json
