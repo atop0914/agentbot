@@ -3,7 +3,6 @@ package app
 import (
 	"log/slog"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/atop0914/agentbot/internal/adapter"
@@ -14,6 +13,7 @@ import (
 	"github.com/atop0914/agentbot/internal/authz"
 	"github.com/atop0914/agentbot/internal/browser"
 	"github.com/atop0914/agentbot/internal/cloud"
+	"github.com/atop0914/agentbot/internal/config"
 	"github.com/atop0914/agentbot/internal/communication"
 	"github.com/atop0914/agentbot/internal/executor"
 	"github.com/atop0914/agentbot/internal/filesystem"
@@ -27,15 +27,19 @@ import (
 	"github.com/atop0914/agentbot/internal/terminal"
 	"github.com/atop0914/agentbot/internal/user"
 	"github.com/atop0914/agentbot/internal/websocket"
+	"github.com/atop0914/agentbot/internal/version"
 )
 
-// adminConsoleDir 是前端构建产物的默认落点。
-// 目录不存在时管理后台返回占位页，不影响服务启动。
-const adminConsoleDir = "web/admin/dist"
+// 管理控制台的前端产物落点改由配置提供（admin.console_dir）。
+// 容器镜像里是 /srv/agentbot/web，本地开发是 web/admin/dist；
+// 目录不存在时后台返回占位页，不影响服务启动。
 
 // App holds all application dependencies
 type App struct {
 	Logger       *slog.Logger
+	// Config 是本次装配使用的完整配置。挂在这里是为了可观测：
+	// 排障时可以问「这个进程实际用了哪个值」，而不是去猜环境变量。
+	Config       config.Config
 	Auth         *auth.Service
 	AuthHandler  *auth.Handler
 	AuthMW       *auth.Middleware
@@ -83,19 +87,27 @@ type App struct {
 
 // New creates a new App with all in-memory services wired up.
 // This is the standalone bootstrap for development/testing.
-func New() *App {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-
+// build 完成全部的组件装配。
+//
+// 它是一个不导出、不接受 Logger 的内部函数：日志器与配置的构造都发生在
+// options.go 的 NewWithConfig（生产路径）与 New（开发路径）里。这样
+// build 里不会再出现任何 os.Getenv / 硬编码机密 —— 装配过程只是接线，
+// 取值全部来自外部注入。
+//
+// 之前的版本在 app.New() 里硬编码了 `Secret: "dev-secret-change-in-production"`，
+// 那是一行「开发方便、生产致命」的代码：任何部署只要忘了注入密钥就会
+// 带着一个公开可伪造的密钥跑起来，而且完全不报错。
+func build(cfg config.Config, logger *slog.Logger) (*App, error) {
 	// User service (in-memory)
 	userRepo := user.NewMemoryRepository()
 	userSvc := user.NewUserService(userRepo)
 
 	// Auth service
 	jwtCfg := auth.TokenConfig{
-		Secret:        "dev-secret-change-in-production",
-		AccessExpiry:  3600e9,   // 1 hour in nanoseconds
-		RefreshExpiry: 604800e9, // 7 days
-		Issuer:        "agentbot",
+		Secret:        cfg.Auth.JWTSecret,
+		AccessExpiry:  cfg.Auth.AccessExpiry,
+		RefreshExpiry: cfg.Auth.RefreshExpiry,
+		Issuer:        cfg.Auth.Issuer,
 	}
 	jwtMgr := auth.NewJWTManager(jwtCfg)
 	oauthCfgs := make(map[string]*auth.OAuthConfig)
@@ -144,7 +156,12 @@ func New() *App {
 	terminalH := terminal.NewHandler(terminalSvc)
 
 	// Filesystem
-	fsMgr, _ := filesystem.NewLocalManager("/tmp/agentbot-fs")
+	// 沙箱根目录来自配置（容器部署下是挂载卷，默认 /var/lib/agentbot/fs）。
+	// 目录创建已由 NewWithConfig 提前校验，这里的错误只可能来自权限变化。
+	fsMgr, err := filesystem.NewLocalManager(cfg.FileSystem.Root)
+	if err != nil {
+		return nil, err
+	}
 	fsRepo := filesystem.NewMemoryRepository()
 	fsSvc := filesystem.NewService(fsMgr, fsRepo)
 	fsH := filesystem.NewHandler(fsSvc)
@@ -285,11 +302,12 @@ func New() *App {
 		Users:   adminUserSource{svc: userSvc},
 		Authz:   adminAuthzSource{svc: authzSvc},
 	}
-	adminSvc := admin.NewService(adminSources, "v1.0.0")
-	adminH := admin.NewHandler(adminSvc, adminConsoleDir)
+	adminSvc := admin.NewService(adminSources, version.Version)
+	adminH := admin.NewHandler(adminSvc, cfg.Admin.ConsoleDir)
 
 	return &App{
 		Logger:       logger,
+		Config:       cfg,
 		Auth:         authSvc,
 		AuthHandler:  authHandler,
 		AuthMW:       authMW,
@@ -331,5 +349,5 @@ func New() *App {
 		TenantH:      tenantH,
 		SSOSvc:       ssoSvc,
 		SSOH:         ssoH,
-	}
+	}, nil
 }

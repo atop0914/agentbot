@@ -275,6 +275,12 @@ func Default() Config {
 func DevelopmentDefault() Config {
 	cfg := Default()
 	cfg.Auth.JWTSecret = "agentbot-development-only-secret-0000000000000000"
+	// 数据库在开发期不是必需依赖（当前存储实现是内存仓库），
+	// 但装配层统一要求非空，所以给一个明确表述「本地」的值。
+	cfg.Database.Password = "agentbot-development-only-db-password"
+	cfg.FileSystem.Root = "/tmp/agentbot-fs"
+	cfg.Storage.LocalPath = "/tmp/agentbot-storage"
+	cfg.Admin.ConsoleDir = "web/admin/dist"
 	return cfg
 }
 
