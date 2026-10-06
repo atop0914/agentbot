@@ -1,0 +1,131 @@
+# AgentBot 本地/单机编排。
+#
+# 使用方式：
+#   cd deploy/docker
+#   cp .env.example .env && 编辑 .env 填入三个机密
+#   docker compose up -d
+#
+# 本文件刻意**不**提供机密的默认值（不写 ${VAR:-default}）：
+# compose 的默认值语法会让「忘了在 .env 里填」变成一次静默的成功启动，
+# 而我们想要的正是启动失败。因此统一用 ${VAR:?message} —— 变量缺失时
+# compose 直接报错退出，错误信息里带上如何修复。
+
+name: agentbot
+
+services:
+  agentbot:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+      args:
+        VERSION: ${AGENTBOT_IMAGE_VERSION:-dev}
+        COMMIT: ${AGENTBOT_IMAGE_COMMIT:-unknown}
+        BUILD_DATE: ${AGENTBOT_IMAGE_BUILD_DATE:-unknown}
+    image: agentbot:${AGENTBOT_IMAGE_VERSION:-dev}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "${AGENTBOT_PUBLISH_PORT:-8080}:8080"
+      - "${AGENTBOT_METRICS_PORT:-9090}:9090"
+    environment:
+      # --- 机密：无默认值，缺失即启动失败 ---
+      AGENTBOT_AUTH_JWT_SECRET: ${AGENTBOT_AUTH_JWT_SECRET:?set AGENTBOT_AUTH_JWT_SECRET in .env (>=32 random bytes)}
+      AGENTBOT_DATABASE_PASSWORD: ${AGENTBOT_DATABASE_PASSWORD:?set AGENTBOT_DATABASE_PASSWORD in .env}
+      # SSO 未启用时可以留空，留空会让所有 SSO 入口返回 503（默认拒绝）。
+      AGENTBOT_SSO_CLIENT_SECRET: ${AGENTBOT_SSO_CLIENT_SECRET:-}
+      AGENTBOT_SSO_ISSUER: ${AGENTBOT_SSO_ISSUER:-}
+      AGENTBOT_SSO_CLIENT_ID: ${AGENTBOT_SSO_CLIENT_ID:-}
+      AGENTBOT_SSO_REDIRECT_URL: ${AGENTBOT_SSO_REDIRECT_URL:-}
+      # --- 普通配置：有安全默认值 ---
+      AGENTBOT_SERVER_HOST: 0.0.0.0
+      AGENTBOT_SERVER_PORT: "8080"
+      AGENTBOT_DATABASE_HOST: postgres
+      AGENTBOT_DATABASE_PORT: "5432"
+      AGENTBOT_DATABASE_USER: ${AGENTBOT_DATABASE_USER:-agentbot}
+      AGENTBOT_DATABASE_NAME: ${AGENTBOT_DATABASE_NAME:-agentbot}
+      AGENTBOT_REDIS_HOST: redis
+      AGENTBOT_REDIS_PORT: "6379"
+      AGENTBOT_LOG_LEVEL: ${AGENTBOT_LOG_LEVEL:-info}
+      AGENTBOT_LOG_FORMAT: json
+      AGENTBOT_FILESYSTEM_ROOT: /var/lib/agentbot/fs
+      AGENTBOT_STORAGE_LOCAL_PATH: /var/lib/agentbot/storage
+      AGENTBOT_ADMIN_CONSOLE_DIR: /srv/agentbot/web
+    volumes:
+      - agentbot-data:/var/lib/agentbot
+    # 容器加固：不加这一节，容器默认就以 root 跑、能写整个文件系统、
+    # 且持有全部 capability。明确写出来才能让「加固」这件事可评审。
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      # distroless 没有 curl/wget，因此健康检查用应用自身做客户端：
+      # 二进制带 `--version` 之类的自检子命令成本更高，而 /health 是
+      # 无认证的轻量端点，直接由本进程发一次请求即可。
+      test: ["CMD", "/app/agentbot", "--health-check"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${AGENTBOT_DATABASE_USER:-agentbot}
+      POSTGRES_PASSWORD: ${AGENTBOT_DATABASE_PASSWORD:?set AGENTBOT_DATABASE_PASSWORD in .env}
+      POSTGRES_DB: ${AGENTBOT_DATABASE_NAME:-agentbot}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${AGENTBOT_DATABASE_USER:-agentbot} -d ${AGENTBOT_DATABASE_NAME:-agentbot}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    # 不发布端口到宿主机：数据库只需要在 compose 网络内可达。
+    # 发布出去是「本地方便、线上致命」的典型，且很多人忘了删。
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --save
+      - "60"
+      - "1"
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - "256mb"
+      - --maxmemory-policy
+      - "allkeys-lru"
+    volumes:
+      - redis-data:/data
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+volumes:
+  agentbot-data:
+  postgres-data:
+  redis-data:

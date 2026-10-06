@@ -1,0 +1,8 @@
+# .env 存放真实机密，永不入库；样例见 .env.example
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*secret*.json
+!deploy/k8s/secret.example.yaml

@@ -1,0 +1,221 @@
+# AgentBot 的 Kubernetes 部署清单（单文件，按 apply 顺序排列）。
+#
+# 应用顺序：
+#   kubectl apply -f deploy/k8s/
+# 但**先**创建 Secret（见 secret.example.yaml）：
+#   kubectl create secret generic agentbot-secrets \
+#     --from-literal=AGENTBOT_AUTH_JWT_SECRET="$(openssl rand -base64 48)" \
+#     --from-literal=AGENTBOT_DATABASE_PASSWORD="$(openssl rand -base64 24)"
+#
+# 为什么 ConfigMap 只放非机密：ConfigMap 在 etcd 里是明文、且默认对
+# 有读 Pod 权限的人可见。把密钥放进去等于把机密降级成普通配置。
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agentbot
+  labels:
+    app.kubernetes.io/name: agentbot
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agentbot-config
+  namespace: agentbot
+  labels:
+    app.kubernetes.io/name: agentbot
+data:
+  # 非机密配置。机密的三个 key 在 Secret 里，不在这里。
+  AGENTBOT_SERVER_HOST: "0.0.0.0"
+  AGENTBOT_SERVER_PORT: "8080"
+  AGENTBOT_LOG_LEVEL: "info"
+  AGENTBOT_LOG_FORMAT: "json"
+  AGENTBOT_DATABASE_HOST: "postgres.agentbot.svc.cluster.local"
+  AGENTBOT_DATABASE_PORT: "5432"
+  AGENTBOT_DATABASE_USER: "agentbot"
+  AGENTBOT_DATABASE_NAME: "agentbot"
+  AGENTBOT_DATABASE_SSL_MODE: "require"
+  AGENTBOT_REDIS_HOST: "redis.agentbot.svc.cluster.local"
+  AGENTBOT_REDIS_PORT: "6379"
+  AGENTBOT_FILESYSTEM_ROOT: "/var/lib/agentbot/fs"
+  AGENTBOT_STORAGE_LOCAL_PATH: "/var/lib/agentbot/storage"
+  AGENTBOT_ADMIN_CONSOLE_DIR: "/srv/agentbot/web"
+  AGENTBOT_METRICS_ENABLED: "true"
+  AGENTBOT_METRICS_PORT: "9090"
+  AGENTBOT_METRICS_PATH: "/metrics"
+  # SSO 默认未启用：留空会让所有 SSO 入口返回 503，而不是放行。
+  AGENTBOT_SSO_ISSUER: ""
+  AGENTBOT_SSO_CLIENT_ID: ""
+  AGENTBOT_SSO_REDIRECT_URL: ""
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentbot
+  namespace: agentbot
+  labels:
+    app.kubernetes.io/name: agentbot
+    app.kubernetes.io/component: api
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agentbot
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agentbot
+        app.kubernetes.io/component: api
+    spec:
+      # 加固基线与容器镜像一致：非 root、不写根文件系统、无 capability。
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      # 让滚动更新有下限：新 Pod 没就绪前旧 Pod 不接走流量，
+      # 且删旧 Pod 时给它 30 秒走完优雅停机。
+      terminationGracePeriodSeconds: 45
+      containers:
+        - name: agentbot
+          image: ghcr.io/atop0914/agentbot:v1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: metrics
+              containerPort: 9090
+          envFrom:
+            - configMapRef:
+                name: agentbot-config
+            - secretRef:
+                # 机密注入：缺 key 时 Pod 起不来（Secret 不存在则 Pod 卡在
+                # CreateContainerConfigError），这正是我们想要的失败方式。
+                name: agentbot-secrets
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              # 不给 CPU limit：CPU 可压缩，限死会导致 throttling 而非省资源。
+              # 内存是不可压缩资源，必须给 limit，否则一个泄漏会拖垮节点。
+              memory: "512Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/agentbot
+            - name: tmp
+              mountPath: /tmp
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+            # 存活探针故意比就绪探针宽松：把「暂时不可用」误判成「需要重启」
+            # 会让一次负载抖动升级成一次滚动重启。
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 3
+            failureThreshold: 20
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: agentbot-data
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: agentbot-data
+  namespace: agentbot
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentbot
+  namespace: agentbot
+  labels:
+    app.kubernetes.io/name: agentbot
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: agentbot
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+    - name: metrics
+      # 指标端口只暴露在集群内：把它经 Ingress 发布出去等于把内部
+      # 拓扑与容量信息对外公开。
+      port: 9090
+      targetPort: metrics
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agentbot-default-deny-ingress
+  namespace: agentbot
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress"]
+  # 默认拒绝全部入站，再由下面的规则按需开口。
+  # 不定这一条时，集群里任何 Pod 都能直连 agentbot。
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 9090
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: agentbot
+  namespace: agentbot
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agentbot
