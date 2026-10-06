@@ -12,8 +12,14 @@
 
 ```
 agentbot/
-├── cmd/agentbot/main.go        # 入口，HTTP 服务器 + 优雅关停
+├── cmd/agentbot/main.go        # 入口：加载配置 → 装配 → HTTP 服务 + 优雅关停
+├── deploy/                     # 部署配置（见 docs/deployment.md）
+│   ├── docker/                 #  多阶段 Dockerfile + compose（含 .env.example）
+│   ├── k8s/                    #  Deployment/Service/ConfigMap/Secret/PVC/NetworkPolicy/PDB
+│   └── config.example.json     #  配置分层样例
 ├── internal/
+│   ├── config/                 # 配置分层（默认值 → 文件 → 环境变量）+ 机密 fail-fast
+│   ├── version/                # 构建期注入的版本信息（ldflags -X）
 │   ├── auth/                   # 认证（JWT + bcrypt + OAuth）
 │   ├── user/                   # 用户
 │   ├── agent/                  # Agent 核心模型 + 状态机
@@ -35,7 +41,6 @@ agentbot/
 │   ├── sso/                    # 企业 SSO（OIDC 授权码流 + ID Token 校验）
 │   ├── admin/                  # 管理后台聚合视图 + 静态资源托管
 │   └── websocket/              # 实时通信
-├── pkg/config/                 # 配置加载
 └── internal/pkg/errors/        # 错误类型
 ```
 
@@ -61,6 +66,9 @@ agentbot/
 - [x] 网络出口路由（出口策略 + 代理网关 + 出站流量审计）
 - [x] 管理后台服务端（聚合视图 + 配置 + 静态资源托管）
 - [x] 实时通信（WebSocket）
+- [x] 多租户隔离 + 企业 SSO（OIDC）
+- [x] 配置分层 + 机密 fail-fast 启动校验
+- [x] 部署配置（distroless 镜像 / compose / K8s manifests）
 
 ### 规划中
 
@@ -68,7 +76,6 @@ agentbot/
 - [ ] Redis 缓存与分布式锁
 - [ ] Agent 运行时（容器隔离，依赖 Docker）
 - [ ] 管理后台前端（React 构建产物挂载到 `/admin/*`）
-- [ ] 部署配置（Docker / K8s）
 
 ## 快速开始
 
@@ -76,8 +83,32 @@ agentbot/
 git clone git@github.com:atop0914/agentbot.git
 cd agentbot
 go test -short ./...        # 运行测试（-short 跳过依赖 Docker 的用例）
-go run cmd/agentbot/main.go # 启动服务，默认监听 :8080
+
+# 本地开发：显式注入一组仅用于本地的机密（生产路径不会这样跑）
+export AGENTBOT_AUTH_JWT_SECRET="$(openssl rand -base64 48)"
+export AGENTBOT_DATABASE_PASSWORD="$(openssl rand -base64 24)"
+go run ./cmd/agentbot        # 默认 :8080，指标 :9090
+
+# 容器编排
+cd deploy/docker && cp .env.example .env   # 填入两个机密
+docker compose up -d
 ```
+
+### 配置
+
+优先级：**内置默认值 → 配置文件（`--config` / `AGENTBOT_CONFIG_FILE`）→ 环境变量**。
+完整说明见 [docs/deployment.md](docs/deployment.md)。
+
+三个机密**没有可用默认值**，缺失时进程拒绝启动（非零退出码 + 可操作的错误信息）：
+
+| 变量 | 何时必需 |
+|------|----------|
+| `AGENTBOT_AUTH_JWT_SECRET` | 始终（≥32 字节随机值） |
+| `AGENTBOT_DATABASE_PASSWORD` | 始终 |
+| `AGENTBOT_SSO_CLIENT_SECRET` | 仅在启用企业 SSO 时 |
+
+这一条是刻意的：带默认机密的部署只会在被攻击时才暴露问题，而拒绝启动在
+第一次部署时就暴露问题。
 
 ## API
 
@@ -125,6 +156,12 @@ POST   /api/v1/auth/login             登录
   跨租户访问一律返回 404（与「不存在」同形），不用 403 —— 403 会泄漏 ID 是否存在
 - 权限表登记后缀规则时注意命名空间：`/users/{id}/status` 与 `/tenants/{id}/status`
   尾部相同，必须用 `Namespace` 区分，否则会静默串用对方的权限动作
+- **业务代码不得直接读环境变量**：唯一入口是 `internal/config`，值由
+  `app.NewWithConfig(cfg)` 注入。散落的 `os.Getenv` 会让「这个部署实际用了哪个值」
+  无法回答，也无法在启动期统一校验
+- 新增配置项：在 `internal/config` 的 `Default()` 给安全默认值 → 在 `fileConfig`
+  加指针字段 → 在 `applyEnv` 加环境变量 → 在 `Validate()` 加约束（若需要）
+- 机密一律不设默认值，并在 `Validate()` 用 `isPlaceholderSecret` 拦住占位符
 
 ## License
 
