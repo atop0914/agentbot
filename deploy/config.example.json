@@ -1,0 +1,73 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8080,
+    "read_timeout": "30s",
+    "write_timeout": "30s",
+    "idle_timeout": "120s"
+  },
+  "database": {
+    "host": "postgres",
+    "port": 5432,
+    "user": "agentbot",
+    "password": "REPLACE_VIA_ENV_AGENTBOT_DATABASE_PASSWORD",
+    "db_name": "agentbot",
+    "ssl_mode": "disable"
+  },
+  "redis": {
+    "host": "redis",
+    "port": 6379,
+    "db": 0
+  },
+  "auth": {
+    "jwt_secret": "REPLACE_VIA_ENV_AGENTBOT_AUTH_JWT_SECRET",
+    "access_expiry": "1h",
+    "refresh_expiry": "168h",
+    "issuer": "agentbot"
+  },
+  "sso": {
+    "issuer": "",
+    "client_id": "",
+    "client_secret": "REPLACE_VIA_ENV_AGENTBOT_SSO_CLIENT_SECRET",
+    "redirect_url": "",
+    "allowed_algs": ["RS256"],
+    "clock_skew": "60s"
+  },
+  "agent": {
+    "default_model": "gpt-4o-mini",
+    "max_tokens": 4096,
+    "default_temperature": 0.7,
+    "max_concurrent": 10,
+    "task_timeout": "30m",
+    "memory_size": 100
+  },
+  "browser": {
+    "headless": true,
+    "timeout": "30s"
+  },
+  "cloud": {
+    "provider": "docker",
+    "namespace": "agentbot",
+    "default_image": "agentbot/sandbox:latest",
+    "max_envs": 100
+  },
+  "filesystem": {
+    "root": "/var/lib/agentbot/fs"
+  },
+  "log": {
+    "level": "info",
+    "format": "json"
+  },
+  "metrics": {
+    "enabled": true,
+    "port": 9090,
+    "path": "/metrics"
+  },
+  "storage": {
+    "provider": "local",
+    "local_path": "/var/lib/agentbot/storage"
+  },
+  "admin": {
+    "console_dir": "/srv/agentbot/web"
+  }
+}
