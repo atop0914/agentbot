@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -12,11 +13,25 @@ import (
 // Handler Agent HTTP 处理器
 type Handler struct {
 	service Service
+	// onCreated 在 Agent 创建成功后回调（装配层注入）。
+	//
+	// 存在的理由：Agent 创建出来之后必须被登记到某个租户名下，
+	// 否则它会成为一个「谁都看不见的孤儿」—— 在租户隔离语义下，
+	// 没有归属等于不归属于任何人，跨租户检查会对所有人返回 404。
+	//
+	// agent 包不直接依赖 tenant 包（否则业务模型会被拖上租户边界），
+	// 这一层薄回调是唯一的耦合点，与 monitor/egress 的 recorder 注入同构。
+	onCreated func(ctx context.Context, agentID string)
 }
 
 // NewHandler 创建 Agent 处理器
 func NewHandler(service Service) *Handler {
 	return &Handler{service: service}
+}
+
+// SetCreatedHook 注入「Agent 创建成功」后的回调（装配层调用）。
+func (h *Handler) SetCreatedHook(fn func(ctx context.Context, agentID string)) {
+	h.onCreated = fn
 }
 
 // RegisterRoutes 注册路由
@@ -118,6 +133,14 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		appErr := errors.FromError(err)
 		writeError(w, appErr.StatusCode, appErr.Message)
 		return
+	}
+
+	// 登记资源归属。失败**不**回滚 Agent 也不改状态码：
+	// Agent 已经建出来了，对调用方而言创建是成功的；
+	// 归属登记失败属于平台内部的一致性问题，记日志由运维处置，
+	// 而不是把一个已完成的操作报成失败（那会让调用方重试并建出重复 Agent）。
+	if h.onCreated != nil {
+		h.onCreated(r.Context(), agent.ID)
 	}
 
 	writeJSON(w, http.StatusCreated, agent.ToResponse())

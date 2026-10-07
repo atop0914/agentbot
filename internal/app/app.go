@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"time"
@@ -276,6 +277,31 @@ func build(cfg config.Config, logger *slog.Logger) (*App, error) {
 	tenantSvc := tenant.NewService(tenantStore)
 	tenantH := tenant.NewHandler(tenantSvc)
 	tenantH.SetIdentityResolver(tenantIdentityFromRequest)
+
+	// 把「新建 Agent」与「登记租户归属」绑在一起（Day 29 修复的缺陷）。
+	//
+	// 之前 registerTenantOwnership 被定义了但**从未被调用** —— 结果是
+	// 通过 HTTP 建出来的 Agent 没有任何租户归属。这不是「少登记一条数据」，
+	// 而是隔离边界出现了一个洞：CountResources 永远为 0（配额形同虚设），
+	// 租户资源清单看不到自己建的 Agent，而跨租户检查对所有人返回 404 ——
+	// 连资源的合法所有者都访问不了它。症状是「建完就查不到」，
+	// 最容易被误判成「创建失败」。现在在装配层把它接上。
+	agentH.SetCreatedHook(func(ctx context.Context, agentID string) {
+		scope := tenant.ScopeFromContext(ctx)
+		if scope == nil {
+			// 无租户作用域（平台管理员的平台级操作）不登记归属：
+			// 凭空挑一个租户会把资源塞进别人家。
+			return
+		}
+		tnID := scope.TenantID()
+		if tnID == tenant.None {
+			return
+		}
+		if err := registerTenantOwnership(ctx, tenantSvc, tnID, tenant.ResourceAgent, agentID); err != nil {
+			logger.Warn("failed to register tenant ownership for agent",
+				"agent_id", agentID, "tenant_id", string(tnID), "error", err)
+		}
+	})
 
 	// 企业 SSO（OIDC，Day 27）。
 	//
