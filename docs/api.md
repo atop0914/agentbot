@@ -548,6 +548,54 @@ curl 'localhost:8080/api/v1/admin/snapshot?sections=overview,agents&recent_limit
 
 ---
 
+## 端到端链路（Day 29 验证）
+
+一条完整的用户链路，按顺序调用即可走通全部关键模块。这也是
+`internal/app/e2e_flow_test.go` 在真实 router + 中间件链上验证的路径。
+
+```
+POST /api/v1/auth/register        注册（公开）
+POST /api/v1/auth/login           登录（公开）→ access_token
+   ↓ （运营在后台授予 coordinator 角色）
+POST /api/v1/agents               建 Agent → 自动登记租户归属
+POST /api/v1/agents/{id}/start    启动 → state 变 running
+POST /api/v1/tasks                建任务（agent_id 指向刚建的 Agent）
+   ↓ （业务动作写审计）
+POST /api/v1/audit/events         写审计事件
+GET  /api/v1/audit/events?actor=  按操作者查询
+GET  /api/v1/audit/export         导出（json/csv，含 manifest）
+GET  /api/v1/admin/snapshot       后台聚合视图（计数与 ID 必须与上面一致）
+GET  /api/v1/tenants/{id}/resources  租户资源清单（能看到刚建的 Agent）
+```
+
+### 授权边界的四种结局
+
+| 场景 | 期望 | 说明 |
+|------|------|------|
+| 未带令牌 | `401` | 主体为空，由认证层拒绝 |
+| 令牌损坏/伪造 | `401` | 验签失败，**不得**静默降级为匿名放行 |
+| 已认证但无权限 | `403` | 诊断含义是「找管理员要权限」，与 401 不同 |
+| 跨租户访问资源 | `404` | 与「不存在」同形；403 会泄漏资源 ID 的存在性 |
+| 暂停租户 | 立即失效 | 同一张未过期令牌立刻被拒，状态是服务端每请求判定的事实 |
+
+### 配置分层（纯环境变量部署）
+
+只注入 `AGENTBOT_*` 环境变量、不给任何配置文件即可启动（k8s 常态）：
+
+```bash
+AGENTBOT_AUTH_JWT_SECRET=<≥32 字节随机值> \
+AGENTBOT_DATABASE_PASSWORD=<非占位符> \
+AGENTBOT_SERVER_PORT=8080 \
+AGENTBOT_METRICS_PORT=9090 \
+AGENTBOT_FILESYSTEM_ROOT=/var/lib/agentbot/fs \
+./agentbot
+```
+
+缺少机密或使用占位符时进程**拒绝启动**（非零退出 + stderr 具名指出缺失项）。
+这是刻意的响亮失败：静默降级到一个公开的默认密钥是最难被发现的事故。
+
+---
+
 ## WebSocket
 
 `GET /api/v1/ws?token=<access_token>` —— 省略 `token` 时以匿名连接建立，
