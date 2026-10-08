@@ -1,12 +1,17 @@
 # AgentBot
 
+[![CI](https://github.com/atop0914/agentbot/actions/workflows/ci.yml/badge.svg)](https://github.com/atop0914/agentbot/actions/workflows/ci.yml)
+
 企业级 AI 智能体平台。部署自主运行的 AI Agent，支持任务分解、浏览器自动化、多 Agent 协作。
+
+当前版本：**v1.0.0**（24 个业务包，`go test -short -race` 全绿）
 
 ## 技术栈
 
 - Go 1.25+ (net/http 标准库)
 - PostgreSQL + Redis（规划中，当前为内存实现）
 - JWT 认证 + bcrypt 密码哈希
+- 零第三方 Web 框架与日志库：依赖只有 JWT、uuid、websocket、go-redis、x/crypto
 
 ## 项目结构
 
@@ -69,6 +74,8 @@ agentbot/
 - [x] 多租户隔离 + 企业 SSO（OIDC）
 - [x] 配置分层 + 机密 fail-fast 启动校验
 - [x] 部署配置（distroless 镜像 / compose / K8s manifests）
+- [x] CI/CD（GitHub Actions：race 测试 + vet + golangci-lint v2；tag 触发交叉编译发版）
+- [x] 构建期版本注入（`make build` / release 产物均带 version/commit/date）
 
 ### 规划中
 
@@ -76,6 +83,33 @@ agentbot/
 - [ ] Redis 缓存与分布式锁
 - [ ] Agent 运行时（容器隔离，依赖 Docker）
 - [ ] 管理后台前端（React 构建产物挂载到 `/admin/*`）
+
+## 构建
+
+```bash
+make build        # 本机二进制 → bin/，注入 git 推导的版本三元组
+make build-all    # 交叉编译 5 个平台 → dist/ + checksums.txt
+make check        # fmt + vet + test（提交前的完整闸门）
+make lint         # golangci-lint（未安装时给出安装命令）
+```
+
+版本号由 `git describe` 推导，**不由人手填** —— 手填的版本号迟早与代码分叉。
+校验注入是否生效：
+
+```bash
+./bin/agentbot --version   # agentbot v1.0.0 (commit 2f6cc2e, built ..., go1.25.6, linux/amd64)
+```
+
+### 发版
+
+打 tag 即触发 `.github/workflows/release.yml`：跑一遍 `-short -race` 测试，
+交叉编译 linux/darwin/windows（跳过 windows/arm64），生成 `checksums.txt`，
+创建 Release 并自动生成 release notes。
+
+```bash
+git checkout main && git merge dev --no-ff
+git tag -a v1.0.1 -m "..." && git push origin main && git push origin v1.0.1
+```
 
 ## 快速开始
 
