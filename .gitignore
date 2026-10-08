@@ -1,0 +1,15 @@
+# 构建产物 —— 绝不入库。
+# 用前导斜杠锚定根目录：裸写 "agentbot" 会连带忽略 cmd/agentbot/ 目录，
+# 那种情况下 git add 会静默跳过源码，push 上去的仓库里没有 main.go。
+/bin/
+/dist/
+
+# 本地部署用机密
+.env
+*.local.json
+
+# 编辑器 / 系统
+.idea/
+.vscode/
+*.swp
+.DS_Store
