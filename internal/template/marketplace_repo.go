@@ -108,10 +108,9 @@ func matchListingFilter(e *MarketplaceEntry, f ListingFilter) bool {
 	if f.Verified != nil && e.Verified != *f.Verified {
 		return false
 	}
-	if f.MinRating > 0 {
-		// Note: rating is on the Template, not on the MarketplaceEntry.
-		// We'll handle this in the service layer where we have access to both.
-	}
+	// MinRating 不在这里过滤：rating 是 Template 的属性，而本函数只有
+	// MarketplaceEntry。真正的过滤发生在 MarketplaceService.Browse
+	// （拿到 Template 之后），此处留白是分工而不是遗漏。
 	return true
 }
 

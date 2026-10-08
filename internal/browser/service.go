@@ -15,7 +15,6 @@ import (
 // Browser actions are simulated locally (no real browser process).
 type LocalService struct {
 	repo Repository
-	mu   sync.Mutex
 	// recordings tracks action recordings per browser
 	recordings map[string][]Action
 	recMu      sync.RWMutex
@@ -102,7 +101,9 @@ func (s *LocalService) Navigate(_ context.Context, browserID string, url string)
 	}
 
 	browser.State = "idle"
-	s.repo.SaveBrowser(browser)
+	// 状态回写是尽力而为：它只是仓库里的展示副本，失败也不改变
+	// 「页面已经打开」这个事实；报错会诱导调用方重试一个已成功的动作。
+	_ = s.repo.SaveBrowser(browser)
 	return page, nil
 }
 
@@ -135,12 +136,12 @@ func (s *LocalService) ExecuteAction(ctx context.Context, browserID string, acti
 	}
 
 	browser.State = "executing"
-	s.repo.SaveBrowser(browser)
+	_ = s.repo.SaveBrowser(browser)
 
 	result := s.simulateAction(browserID, action)
 
 	browser.State = "idle"
-	s.repo.SaveBrowser(browser)
+	_ = s.repo.SaveBrowser(browser)
 	return result, nil
 }
 

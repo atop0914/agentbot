@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
-	"strings"
 	"sync"
 	"time"
 
@@ -23,9 +22,6 @@ type LocalManager struct {
 type localSession struct {
 	*Session
 	cmd     *exec.Cmd
-	stdin   io.WriteCloser
-	stdout  *bytes.Buffer
-	stderr  *bytes.Buffer
 	workDir string
 }
 
@@ -114,7 +110,8 @@ func (m *LocalManager) CloseSession(ctx context.Context, sessionID string) error
 
 	// 终止正在运行的命令
 	if local.cmd != nil && local.cmd.Process != nil {
-		local.cmd.Process.Kill()
+		// 进程可能已自行退出，Kill 失败没有补救动作。
+		_ = local.cmd.Process.Kill()
 		local.cmd = nil
 	}
 
@@ -305,9 +302,4 @@ func (m *LocalManager) ListSessions(ctx context.Context, filter SessionFilter) (
 		result = append(result, &copy)
 	}
 	return result, nil
-}
-
-// formatCommand 格式化命令（去除首尾空格）
-func formatCommand(cmd string) string {
-	return strings.TrimSpace(cmd)
 }

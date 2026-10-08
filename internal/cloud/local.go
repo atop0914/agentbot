@@ -93,9 +93,10 @@ func (m *LocalManager) Destroy(ctx context.Context, envID string) error {
 		return fmt.Errorf("environment %s not found", envID)
 	}
 
-	// 终止进程（如果有）
+	// 终止进程（如果有）。process 句柄当前不会被真正填充（本地管理器只模拟
+	// 生命周期），Kill 失败也没有补救动作。
 	if local.process != nil {
-		local.process.Kill()
+		_ = local.process.Kill()
 		local.process = nil
 	}
 
@@ -173,9 +174,9 @@ func (m *LocalManager) Stop(ctx context.Context, envID string) error {
 		return fmt.Errorf("cannot stop environment in state %s", local.State)
 	}
 
-	// 终止进程
+	// 终止进程（同上：句柄未填充，失败无补救动作）
 	if local.process != nil {
-		local.process.Kill()
+		_ = local.process.Kill()
 		local.process = nil
 	}
 
@@ -266,6 +267,33 @@ func (m *LocalManager) ExecuteCommand(ctx context.Context, envID string, command
 	}, nil
 }
 
+// resolveInWorkPath 把请求路径解析到环境工作目录之内，越界即报错。
+//
+// 这里修的是一个「看起来在做校验、实际什么都没做」的空分支：
+// 原实现判断了 `..` 与 `/` 前缀，分支体是空的，于是
+// filepath.Join(workPath, "../../etc/passwd") 会**真的**写到工作目录之外；
+// 下载与列举路径上更危险 —— 可以直接读到宿主机的文件。
+//
+// 判定方式改为「解析后仍在 workPath 内」，而不是靠字符串前缀猜：
+// 前缀检查漏得掉的形式太多（`a/../../b`、`..`、URL 编码等），
+// 只有在拼接完成后用 filepath.Rel 比对才是可靠的。
+func resolveInWorkPath(workPath, path string) (string, error) {
+	if path == "" {
+		return workPath, nil
+	}
+	cleanPath := filepath.Clean(path)
+	if filepath.IsAbs(cleanPath) {
+		return "", fmt.Errorf("path %q must be relative to the environment work directory", path)
+	}
+
+	fullPath := filepath.Join(workPath, cleanPath)
+	rel, err := filepath.Rel(workPath, fullPath)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path %q escapes the environment work directory", path)
+	}
+	return fullPath, nil
+}
+
 // UploadFile 上传文件到环境
 func (m *LocalManager) UploadFile(ctx context.Context, envID string, path string, content []byte) error {
 	m.mu.RLock()
@@ -276,13 +304,11 @@ func (m *LocalManager) UploadFile(ctx context.Context, envID string, path string
 		return fmt.Errorf("environment %s not found", envID)
 	}
 
-	// 防止路径遍历攻击
-	cleanPath := filepath.Clean(path)
-	if strings.HasPrefix(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
-		// 绝对路径直接使用，相对路径拼接
+	fullPath, err := resolveInWorkPath(local.workPath, path)
+	if err != nil {
+		return err
 	}
 
-	fullPath := filepath.Join(local.workPath, cleanPath)
 	dir := filepath.Dir(fullPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("create directory: %w", err)
@@ -305,7 +331,10 @@ func (m *LocalManager) DownloadFile(ctx context.Context, envID string, path stri
 		return nil, fmt.Errorf("environment %s not found", envID)
 	}
 
-	fullPath := filepath.Join(local.workPath, filepath.Clean(path))
+	fullPath, err := resolveInWorkPath(local.workPath, path)
+	if err != nil {
+		return nil, err
+	}
 	content, err := os.ReadFile(fullPath)
 	if err != nil {
 		return nil, fmt.Errorf("read file: %w", err)
@@ -324,7 +353,10 @@ func (m *LocalManager) ListFiles(ctx context.Context, envID string, path string)
 		return nil, fmt.Errorf("environment %s not found", envID)
 	}
 
-	fullPath := filepath.Join(local.workPath, filepath.Clean(path))
+	fullPath, err := resolveInWorkPath(local.workPath, path)
+	if err != nil {
+		return nil, err
+	}
 	entries, err := os.ReadDir(fullPath)
 	if err != nil {
 		return nil, fmt.Errorf("read directory: %w", err)

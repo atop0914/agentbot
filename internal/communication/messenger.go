@@ -230,7 +230,11 @@ func (m *AgentMessengerImpl) CompleteRequest(ctx context.Context, requestID stri
 		Content:   fmt.Sprintf("response to %s: success=%v", requestID, success),
 		Timestamp: time.Now(),
 	}
-	m.repo.SaveMessage(ctx, msg)
+	// 落库失败不再回退投递：响应已经算出来了，投递才是本函数的职责；
+	// 但错误要上抛，让调用方决定是否重试或记录。
+	if err := m.repo.SaveMessage(ctx, msg); err != nil {
+		return fmt.Errorf("store response message: %w", err)
+	}
 
 	// Deliver via channel
 	select {
@@ -290,7 +294,9 @@ func (m *AgentMessengerImpl) HandleRequest(ctx context.Context, topic string, ha
 				CreatedAt: msg.Timestamp,
 			}
 			resp := handler(req)
-			m.CompleteRequest(ctx, req.RequestID, resp.Success, resp.Result, resp.Error)
+			// 订阅回调没有 error 返回通道，这里无法上抛；
+			// CompleteRequest 只对「未知 requestID」报错，正常路径不会失败。
+			_ = m.CompleteRequest(ctx, req.RequestID, resp.Success, resp.Result, resp.Error)
 		}
 	})
 }

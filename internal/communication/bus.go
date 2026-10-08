@@ -3,6 +3,7 @@ package communication
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 
 	"github.com/atop0914/agentbot/internal/websocket"
@@ -60,27 +61,34 @@ func NewWSBridge(bus *MemoryBus, hub *websocket.Hub) *WSBridge {
 }
 
 // Start subscribes to key topics and forwards to WS clients.
+//
+// 订阅失败必须上报：桥接层没挂上意味着 WS 客户端**静默**收不到任何转发，
+// 这类故障不做失败上抛就只能靠用户反馈发现。
 func (b *WSBridge) Start(ctx context.Context) error {
 	// Subscribe to agent status updates
-	b.bus.Subscribe(ctx, "agent.status", func(msg Message) {
+	if err := b.bus.Subscribe(ctx, "agent.status", func(msg Message) {
 		data, _ := json.Marshal(msg)
 		b.hub.Send(&websocket.Envelope{
 			Type:    "message",
 			Payload: data,
 		})
-	})
+	}); err != nil {
+		return fmt.Errorf("subscribe agent.status: %w", err)
+	}
 
 	// Subscribe to task updates
-	b.bus.Subscribe(ctx, "task.update", func(msg Message) {
+	if err := b.bus.Subscribe(ctx, "task.update", func(msg Message) {
 		data, _ := json.Marshal(msg)
 		b.hub.Send(&websocket.Envelope{
 			Type:    "message",
 			Payload: data,
 		})
-	})
+	}); err != nil {
+		return fmt.Errorf("subscribe task.update: %w", err)
+	}
 
 	// Subscribe to group messages
-	b.bus.Subscribe(ctx, "group.message", func(msg Message) {
+	if err := b.bus.Subscribe(ctx, "group.message", func(msg Message) {
 		data, _ := json.Marshal(msg)
 		if msg.GroupID != "" {
 			b.hub.Send(&websocket.Envelope{
@@ -88,7 +96,9 @@ func (b *WSBridge) Start(ctx context.Context) error {
 				Payload: data,
 			})
 		}
-	})
+	}); err != nil {
+		return fmt.Errorf("subscribe group.message: %w", err)
+	}
 
 	return nil
 }

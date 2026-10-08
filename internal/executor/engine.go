@@ -191,7 +191,9 @@ func (e *ExecutionEngine) dispatch(ctx context.Context) {
 	// 更新任务状态
 	t.State = task.StateInProgress
 	t.StartedAt = time.Now().UTC()
-	e.repo.Update(ctx, t)
+	// 状态回写失败不阻塞派发：任务已经交给执行 goroutine，
+	// 这里失败只影响仓库里的展示副本。
+	_ = e.repo.Update(ctx, t)
 
 	// 启动异步执行
 	taskCtx, cancel := context.WithTimeout(ctx, e.config.TaskTimeout)
@@ -218,8 +220,10 @@ func (e *ExecutionEngine) executeTask(ctx context.Context, slot *agentSlot, t *t
 		select {
 		case <-ctx.Done():
 			t.State = task.StateFailed
-			t.Error = "task timeout or cancelled"
-			e.repo.Update(ctx, t)
+			t.Error = "task timeout or canceled"
+			// 执行路径在独立 goroutine 中，没有可用的错误上报通道；
+			// 内存仓库不会失败，接真实存储后需要改为带重试的上报。
+			_ = e.repo.Update(ctx, t)
 			return
 		default:
 		}
@@ -231,7 +235,7 @@ func (e *ExecutionEngine) executeTask(ctx context.Context, slot *agentSlot, t *t
 
 		// 执行子任务
 		t.Subtasks[i].State = task.StateInProgress
-		e.repo.Update(ctx, t)
+		_ = e.repo.Update(ctx, t)
 
 		// 模拟执行（实际执行器后续集成）
 		// TODO: 集成真实的 Action 执行器
@@ -252,7 +256,8 @@ func (e *ExecutionEngine) executeTask(ctx context.Context, slot *agentSlot, t *t
 		t.State = task.StateFailed
 	}
 
-	e.repo.Update(ctx, t)
+	// 终态回写同上：执行在独立 goroutine 中，无错误上报通道。
+	_ = e.repo.Update(ctx, t)
 }
 
 // dependenciesMet 检查子任务的依赖是否已满足

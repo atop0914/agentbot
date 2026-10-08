@@ -203,7 +203,7 @@ func (s *taskService) finalize(ctx context.Context, taskID string, local *task.T
 		return
 	}
 	if current.State != task.StateInProgress {
-		// 已被外部置为终态（failed/cancelled），丢弃异步结果。
+		// 已被外部置为终态（failed/canceled），丢弃异步结果。
 		return
 	}
 

@@ -8,16 +8,16 @@ import (
 
 // Config holds application configuration
 type Config struct {
-	Server     ServerConfig     `json:"server"`
-	Database   DatabaseConfig   `json:"database"`
-	Redis      RedisConfig      `json:"redis"`
-	Auth       AuthConfig       `json:"auth"`
-	Agent      AgentConfig      `json:"agent"`
-	Browser    BrowserConfig    `json:"browser"`
-	Cloud      CloudConfig      `json:"cloud"`
-	Log        LogConfig        `json:"log"`
-	Metrics    MetricsConfig    `json:"metrics"`
-	Storage    StorageConfig    `json:"storage"`
+	Server   ServerConfig   `json:"server"`
+	Database DatabaseConfig `json:"database"`
+	Redis    RedisConfig    `json:"redis"`
+	Auth     AuthConfig     `json:"auth"`
+	Agent    AgentConfig    `json:"agent"`
+	Browser  BrowserConfig  `json:"browser"`
+	Cloud    CloudConfig    `json:"cloud"`
+	Log      LogConfig      `json:"log"`
+	Metrics  MetricsConfig  `json:"metrics"`
+	Storage  StorageConfig  `json:"storage"`
 }
 
 // ServerConfig defines HTTP server configuration
@@ -49,9 +49,9 @@ type RedisConfig struct {
 
 // AuthConfig defines authentication configuration
 type AuthConfig struct {
-	JWTSecret      string        `json:"jwt_secret"`
-	TokenExpiry    time.Duration `json:"token_expiry"`
-	RefreshExpiry  time.Duration `json:"refresh_expiry"`
+	JWTSecret      string          `json:"jwt_secret"`
+	TokenExpiry    time.Duration   `json:"token_expiry"`
+	RefreshExpiry  time.Duration   `json:"refresh_expiry"`
 	OAuthProviders []OAuthProvider `json:"oauth_providers,omitempty"`
 }
 
@@ -76,11 +76,11 @@ type AgentConfig struct {
 
 // BrowserConfig defines browser configuration
 type BrowserConfig struct {
-	Headless     bool   `json:"headless"`
-	ExecutablePath string `json:"executable_path,omitempty"`
-	UserDataDir  string `json:"user_data_dir,omitempty"`
-	Proxy        string `json:"proxy,omitempty"`
-	Timeout      time.Duration `json:"timeout"`
+	Headless       bool          `json:"headless"`
+	ExecutablePath string        `json:"executable_path,omitempty"`
+	UserDataDir    string        `json:"user_data_dir,omitempty"`
+	Proxy          string        `json:"proxy,omitempty"`
+	Timeout        time.Duration `json:"timeout"`
 }
 
 // CloudConfig defines cloud environment configuration

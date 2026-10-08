@@ -616,11 +616,6 @@ func DescribeRoute(r RouteRule) string {
 	return fmt.Sprintf("%s %s -> %s", method, r.Pattern, r.Action)
 }
 
-// contextWithTarget 便于测试与内部调用传递目标（保留扩展点）。
-func contextWithTarget(ctx context.Context, target Target) context.Context {
-	return context.WithValue(ctx, targetContextKey{}, target)
-}
-
 type targetContextKey struct{}
 
 // TargetFromContext 取出由中间件解析的目标。

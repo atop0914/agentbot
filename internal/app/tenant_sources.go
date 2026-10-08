@@ -47,42 +47,6 @@ func tenantIdentityFromRequest(r *http.Request) (tenant.ID, string, bool) {
 	return tenantID, userID, true
 }
 
-// tenantUserDirectory 把 internal/user 适配成 sso.UserDirectory。
-//
-// sso 包不反向依赖 user 包（避免身份校验逻辑拖上业务依赖），
-// 这一层薄适配是唯一的耦合点，也是「邮箱冲突策略」被真正执行的地方。
-type tenantUserDirectory struct {
-	users userDirectoryBackend
-}
-
-// userDirectoryBackend 是适配器需要的最小用户能力集。
-type userDirectoryBackend interface {
-	FindByEmail(ctx context.Context, email string) (userID string, found bool, err error)
-	CreateFromSSO(ctx context.Context, email, username, issuer, subject string) (userID string, err error)
-	LinkSSO(ctx context.Context, userID, issuer, subject string) error
-}
-
-func (d tenantUserDirectory) FindByEmail(ctx context.Context, email string) (string, bool, error) {
-	if d.users == nil {
-		return "", false, nil
-	}
-	return d.users.FindByEmail(ctx, email)
-}
-
-func (d tenantUserDirectory) CreateFromSSO(ctx context.Context, email, username, issuer, subject string) (string, error) {
-	if d.users == nil {
-		return "", errTenantDirectoryUnavailable
-	}
-	return d.users.CreateFromSSO(ctx, email, username, issuer, subject)
-}
-
-func (d tenantUserDirectory) LinkSSO(ctx context.Context, userID, issuer, subject string) error {
-	if d.users == nil {
-		return errTenantDirectoryUnavailable
-	}
-	return d.users.LinkSSO(ctx, userID, issuer, subject)
-}
-
 // ssoSessionIssuer 把 SSO 账号换成平台的 JWT。
 //
 // 关键点：**租户声明由服务端决定**。SSO 回调里带 tenant_id 时，

@@ -49,8 +49,9 @@ func (s *Service) CreateEnvironment(ctx context.Context, agentID string, req Cre
 
 	// 持久化环境记录
 	if err := s.repo.Create(ctx, env); err != nil {
-		// 创建成功但持久化失败，尝试清理
-		s.manager.Destroy(ctx, env.ID)
+		// 创建成功但持久化失败，尝试清理。清理失败无从补救：
+		// 要报给调用方的是「持久化失败」这个根因，不是清理时的次生错误。
+		_ = s.manager.Destroy(ctx, env.ID)
 		return nil, fmt.Errorf("persist environment: %w", err)
 	}
 
@@ -104,7 +105,10 @@ func (s *Service) StartEnvironment(ctx context.Context, envID string) error {
 
 	env, _ := s.manager.Get(ctx, envID)
 	if env != nil {
-		s.repo.Update(ctx, env)
+		// 仓库里的这份是展示用副本，manager 才是状态的权威来源；
+		// 副本写失败不该让「已经启动成功」报错给调用方 ——
+		// 那会诱导重试，而重试是对着一个已在运行的环境再启动一次。
+		_ = s.repo.Update(ctx, env)
 	}
 
 	return nil
@@ -118,7 +122,7 @@ func (s *Service) StopEnvironment(ctx context.Context, envID string) error {
 
 	env, _ := s.manager.Get(ctx, envID)
 	if env != nil {
-		s.repo.Update(ctx, env)
+		_ = s.repo.Update(ctx, env)
 	}
 
 	return nil
@@ -132,7 +136,7 @@ func (s *Service) PauseEnvironment(ctx context.Context, envID string) error {
 
 	env, _ := s.manager.Get(ctx, envID)
 	if env != nil {
-		s.repo.Update(ctx, env)
+		_ = s.repo.Update(ctx, env)
 	}
 
 	return nil
@@ -146,7 +150,7 @@ func (s *Service) ResumeEnvironment(ctx context.Context, envID string) error {
 
 	env, _ := s.manager.Get(ctx, envID)
 	if env != nil {
-		s.repo.Update(ctx, env)
+		_ = s.repo.Update(ctx, env)
 	}
 
 	return nil

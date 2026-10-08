@@ -6,7 +6,6 @@ import (
 	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
-	"strconv"
 	"time"
 )
 
@@ -290,13 +289,4 @@ func isOverWindow(start, end *time.Time) (bool, time.Duration) {
 	}
 	d := end.Sub(*start)
 	return d > MaxExportRange, d
-}
-
-// parseCountQuery 解析形如 "count=3" 的查询参数（校验接口用）。
-func parseCountQuery(raw string) (int, bool) {
-	n, err := strconv.Atoi(raw)
-	if err != nil || n < 0 {
-		return 0, false
-	}
-	return n, true
 }

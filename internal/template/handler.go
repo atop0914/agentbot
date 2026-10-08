@@ -82,7 +82,7 @@ func (h *Handler) createTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(created)
+	_ = json.NewEncoder(w).Encode(created)
 }
 
 func (h *Handler) handleTemplateByID(w http.ResponseWriter, r *http.Request) {
@@ -162,7 +162,8 @@ func (h *Handler) exportTemplate(w http.ResponseWriter, r *http.Request, id stri
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Disposition", "attachment; filename=template-"+id+".json")
-	w.Write(data)
+	// 头部已发出，写失败无法回退成另一个状态码；调用方拿到的是截断的响应体。
+	_, _ = w.Write(data)
 }
 
 func (h *Handler) executeTemplate(w http.ResponseWriter, r *http.Request, id string) {
@@ -185,7 +186,7 @@ func (h *Handler) executeTemplate(w http.ResponseWriter, r *http.Request, id str
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(exec)
+	_ = json.NewEncoder(w).Encode(exec)
 }
 
 func (h *Handler) listExecutions(w http.ResponseWriter, r *http.Request, templateID string) {
@@ -271,19 +272,19 @@ func (h *Handler) handleStopRecording(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(tmpl)
+	_ = json.NewEncoder(w).Encode(tmpl)
 }
 
 // jsonOK writes a JSON 200 response.
 func jsonOK(w http.ResponseWriter, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(data)
+	_ = json.NewEncoder(w).Encode(data)
 }
 
 // jsonError writes a JSON error response.
 func jsonError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]string{"error": message})
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
 }

@@ -15,7 +15,7 @@ func NewRouter(a *App) http.Handler {
 	// Health check (unauthenticated)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
 
 	// Auth routes (public)
@@ -145,18 +145,4 @@ func NewRouter(a *App) http.Handler {
 // 避免"改个 header 就提升权限"。
 func authzSubjectFromRequest(r *http.Request) authz.Subject {
 	return authz.SubjectFromClaims(r)
-}
-
-// jsonOK writes a JSON 200 response.
-func jsonOK(w http.ResponseWriter, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(data)
-}
-
-// jsonError writes a JSON error response.
-func jsonError(w http.ResponseWriter, status int, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]string{"error": message})
 }

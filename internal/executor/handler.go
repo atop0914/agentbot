@@ -90,7 +90,7 @@ func (h *Handler) handleAction(w http.ResponseWriter, r *http.Request, id, actio
 			writeError(w, appErr.StatusCode, appErr.Message)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"message": "task cancelled"})
+		writeJSON(w, http.StatusOK, map[string]string{"message": "task canceled"})
 
 	case "retry":
 		if err := h.manager.Retry(ctx, id); err != nil {
@@ -245,7 +245,8 @@ func (h *Handler) ListWithOffset(w http.ResponseWriter, r *http.Request) {
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
+	// 响应头已经发出，编码失败已无法回退成另一个状态码告诉客户端。
+	_ = json.NewEncoder(w).Encode(data)
 }
 
 // writeError 写入错误响应

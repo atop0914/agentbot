@@ -104,7 +104,8 @@ func (h *Handler) createRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(toRoleResponse(role))
+	// 201 状态码已发出，编码失败无法再改变响应结果。
+	_ = json.NewEncoder(w).Encode(toRoleResponse(role))
 }
 
 func (h *Handler) getRole(w http.ResponseWriter, r *http.Request, id string) {
@@ -179,7 +180,8 @@ func (h *Handler) assignRole(w http.ResponseWriter, r *http.Request, agentID str
 		return
 	}
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{
+	// 201 已发出，编码失败无法回退。
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"status": "assigned",
 		"id":     assignment.ID,
 	})
@@ -248,11 +250,11 @@ func toRoleResponse(r *Role) RoleResponse {
 func jsonOK(w http.ResponseWriter, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(data)
+	_ = json.NewEncoder(w).Encode(data)
 }
 
 func jsonError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]string{"error": message})
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
 }

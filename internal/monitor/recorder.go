@@ -2,7 +2,6 @@ package monitor
 
 import (
 	"context"
-	"time"
 )
 
 // DispositionRecorder 是告警处置的审计落地点。
@@ -32,6 +31,3 @@ func (f DispositionRecorderFunc) RecordDisposition(ctx context.Context, alert *A
 	}
 	return f(ctx, alert, disposition)
 }
-
-// timeNow 便于测试替换时间源；生产路径上就是 time.Now().UTC()。
-var timeNow = func() time.Time { return time.Now().UTC() }

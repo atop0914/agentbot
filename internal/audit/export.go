@@ -3,7 +3,6 @@ package audit
 import (
 	"bytes"
 	"encoding/csv"
-	"encoding/json"
 	"strconv"
 )
 
@@ -11,30 +10,6 @@ import (
 var csvHeader = []string{
 	"id", "timestamp", "actor", "actor_type", "action",
 	"resource", "resource_id", "status", "error", "ip_address", "user_agent",
-}
-
-// exportJSON 把事件导出为缩进 JSON，方便人工查阅与归档。
-func exportJSON(records []*EventRecord) ([]byte, error) {
-	buf := &bytes.Buffer{}
-	enc := json.NewEncoder(buf)
-	enc.SetIndent("", "  ")
-	enc.SetEscapeHTML(false)
-
-	// 用切片包装并显式补 count，空结果导出为 [] 而不是 null。
-	payload := struct {
-		Count   int            `json:"count"`
-		Records []*EventRecord `json:"records"`
-	}{
-		Count:   len(records),
-		Records: records,
-	}
-	if payload.Records == nil {
-		payload.Records = []*EventRecord{}
-	}
-	if err := enc.Encode(payload); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
 }
 
 // exportCSV 把事件导出为 CSV，便于导入表格做二次分析。

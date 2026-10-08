@@ -9,8 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/atop0914/agentbot/internal/user"
 	"github.com/google/uuid"
+
+	"github.com/atop0914/agentbot/internal/user"
 )
 
 // Service 认证服务实现

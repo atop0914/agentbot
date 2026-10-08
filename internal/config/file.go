@@ -60,13 +60,13 @@ type fileAuth struct {
 }
 
 type fileSSO struct {
-	Issuer       *string  `json:"issuer"`
-	ClientID     *string  `json:"client_id"`
-	ClientSecret *string  `json:"client_secret"`
-	RedirectURL  *string  `json:"redirect_url"`
+	Issuer       *string   `json:"issuer"`
+	ClientID     *string   `json:"client_id"`
+	ClientSecret *string   `json:"client_secret"`
+	RedirectURL  *string   `json:"redirect_url"`
 	Scopes       *[]string `json:"scopes"`
 	AllowedAlgs  *[]string `json:"allowed_algs"`
-	ClockSkew    *string  `json:"clock_skew"`
+	ClockSkew    *string   `json:"clock_skew"`
 }
 
 type fileAgent struct {

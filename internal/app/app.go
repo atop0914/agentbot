@@ -14,8 +14,8 @@ import (
 	"github.com/atop0914/agentbot/internal/authz"
 	"github.com/atop0914/agentbot/internal/browser"
 	"github.com/atop0914/agentbot/internal/cloud"
-	"github.com/atop0914/agentbot/internal/config"
 	"github.com/atop0914/agentbot/internal/communication"
+	"github.com/atop0914/agentbot/internal/config"
 	"github.com/atop0914/agentbot/internal/executor"
 	"github.com/atop0914/agentbot/internal/filesystem"
 	"github.com/atop0914/agentbot/internal/memory"
@@ -27,8 +27,8 @@ import (
 	"github.com/atop0914/agentbot/internal/tenant"
 	"github.com/atop0914/agentbot/internal/terminal"
 	"github.com/atop0914/agentbot/internal/user"
-	"github.com/atop0914/agentbot/internal/websocket"
 	"github.com/atop0914/agentbot/internal/version"
+	"github.com/atop0914/agentbot/internal/websocket"
 )
 
 // 管理控制台的前端产物落点改由配置提供（admin.console_dir）。
@@ -37,7 +37,7 @@ import (
 
 // App holds all application dependencies
 type App struct {
-	Logger       *slog.Logger
+	Logger *slog.Logger
 	// Config 是本次装配使用的完整配置。挂在这里是为了可观测：
 	// 排障时可以问「这个进程实际用了哪个值」，而不是去猜环境变量。
 	Config       config.Config

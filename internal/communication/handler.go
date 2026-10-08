@@ -54,7 +54,7 @@ func (h *Handler) sendMessage(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(msg)
+	_ = json.NewEncoder(w).Encode(msg)
 }
 
 func (h *Handler) getMessages(w http.ResponseWriter, r *http.Request) {
@@ -79,7 +79,7 @@ func (h *Handler) getMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(msgs)
+	_ = json.NewEncoder(w).Encode(msgs)
 }
 
 func (h *Handler) handleConversation(w http.ResponseWriter, r *http.Request) {
@@ -110,7 +110,7 @@ func (h *Handler) handleConversation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(msgs)
+	_ = json.NewEncoder(w).Encode(msgs)
 }
 
 func (h *Handler) handleGroups(w http.ResponseWriter, r *http.Request) {
@@ -140,7 +140,7 @@ func (h *Handler) createGroup(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(created)
+	_ = json.NewEncoder(w).Encode(created)
 }
 
 func (h *Handler) listGroups(w http.ResponseWriter, r *http.Request) {
@@ -158,7 +158,7 @@ func (h *Handler) listGroups(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(groups)
+	_ = json.NewEncoder(w).Encode(groups)
 }
 
 func (h *Handler) handleGroupJoin(w http.ResponseWriter, r *http.Request) {
@@ -182,7 +182,7 @@ func (h *Handler) handleGroupJoin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"status": "joined"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "joined"})
 }
 
 func (h *Handler) handleGroupLeave(w http.ResponseWriter, r *http.Request) {
@@ -206,7 +206,7 @@ func (h *Handler) handleGroupLeave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"status": "left"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "left"})
 }
 
 func (h *Handler) handleChannels(w http.ResponseWriter, r *http.Request) {
@@ -223,7 +223,7 @@ func (h *Handler) handleChannels(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(channels)
+		_ = json.NewEncoder(w).Encode(channels)
 
 	case http.MethodPost:
 		var ch Channel
@@ -238,7 +238,7 @@ func (h *Handler) handleChannels(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(created)
+		_ = json.NewEncoder(w).Encode(created)
 
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

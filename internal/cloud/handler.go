@@ -249,7 +249,7 @@ func (h *Handler) DownloadFile(w http.ResponseWriter, r *http.Request, envID str
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", path))
 	w.WriteHeader(http.StatusOK)
-	w.Write(content)
+	_, _ = w.Write(content)
 }
 
 // ListFiles 列出文件
@@ -286,7 +286,7 @@ func (h *Handler) GetMetrics(w http.ResponseWriter, r *http.Request, envID strin
 func writeCloudJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
+	_ = json.NewEncoder(w).Encode(data)
 }
 
 // writeCloudError 写入错误响应

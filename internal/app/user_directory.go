@@ -4,8 +4,9 @@ import (
 	"context"
 	"strings"
 
-	"github.com/atop0914/agentbot/internal/user"
 	"github.com/google/uuid"
+
+	"github.com/atop0914/agentbot/internal/user"
 )
 
 // userDirectoryAdapter 把 internal/user 适配为 sso.UserDirectory。

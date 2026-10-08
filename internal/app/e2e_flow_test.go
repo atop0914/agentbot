@@ -309,8 +309,8 @@ func TestE2EFullChainRegisterToAdminConsole(t *testing.T) {
 			Degraded    bool `json:"degraded"`
 		} `json:"overview"`
 		Agents *struct {
-			Total   int            `json:"total"`
-			ByState map[string]int `json:"by_state"`
+			Total    int            `json:"total"`
+			ByState  map[string]int `json:"by_state"`
 			Recently []struct {
 				ID    string `json:"id"`
 				Name  string `json:"name"`

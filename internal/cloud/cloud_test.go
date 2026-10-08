@@ -295,6 +295,54 @@ func TestLocalManager_FileOperations(t *testing.T) {
 	}
 }
 
+// TestLocalManager_PathTraversalBlocked 断言「越界路径必须被拒绝」。
+//
+// 这条测试的由来：UploadFile 里原本有一个判定了 `..` / `/` 前缀却**什么都不做**
+// 的空分支，于是 `../../escape.txt` 会真的落到工作目录之外；下载与列举路径
+// 则只做了 Join，读 `../../etc/passwd` 并不是难事。
+//
+// 断言的是「拒绝」本身，而不是「写到了别处」—— 越界路径必须在触碰文件系统
+// 之前就被挡下，否则安全边界只是事后补救。
+func TestLocalManager_PathTraversalBlocked(t *testing.T) {
+	tmpDir := t.TempDir()
+	mgr, _ := NewLocalManager(tmpDir)
+	ctx := context.Background()
+
+	env, _ := mgr.Create(ctx, "agent-1", EnvironmentConfig{})
+
+	escapeAttempts := []string{
+		"../escape.txt",
+		"../../escape.txt",
+		"a/../../escape.txt",
+		"/etc/passwd",
+	}
+	for _, p := range escapeAttempts {
+		if err := mgr.UploadFile(ctx, env.ID, p, []byte("x")); err == nil {
+			t.Errorf("upload %q: expected rejection, got nil", p)
+		}
+		if _, err := mgr.DownloadFile(ctx, env.ID, p); err == nil {
+			t.Errorf("download %q: expected rejection, got nil", p)
+		}
+		if _, err := mgr.ListFiles(ctx, env.ID, p); err == nil {
+			t.Errorf("list %q: expected rejection, got nil", p)
+		}
+	}
+
+	// 「没拦住会落到哪里」的那个位置必须不存在。
+	escaped := filepath.Join(mgr.environments[env.ID].workPath, "..", "escape.txt")
+	if _, err := os.Stat(escaped); err == nil {
+		t.Fatalf("path traversal actually escaped: %s exists", escaped)
+	}
+
+	// 合法路径仍须可用 —— 避免把修复做成「一律拒绝」。
+	if err := mgr.UploadFile(ctx, env.ID, "nested/ok.txt", []byte("ok")); err != nil {
+		t.Errorf("legit nested upload rejected: %v", err)
+	}
+	if got, err := mgr.DownloadFile(ctx, env.ID, "nested/ok.txt"); err != nil || string(got) != "ok" {
+		t.Errorf("legit nested download failed: err=%v got=%q", err, string(got))
+	}
+}
+
 func TestLocalManager_GetMetrics(t *testing.T) {
 	tmpDir := t.TempDir()
 	mgr, _ := NewLocalManager(tmpDir)

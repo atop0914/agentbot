@@ -180,7 +180,7 @@ func (h *Handler) screenshot(w http.ResponseWriter, r *http.Request, browserID s
 		return
 	}
 	w.Header().Set("Content-Type", "image/png")
-	w.Write(data)
+	_, _ = w.Write(data)
 }
 
 func (h *Handler) extractText(w http.ResponseWriter, r *http.Request, browserID string) {
@@ -268,7 +268,7 @@ func (h *Handler) handleProfileByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(data)
+		_, _ = w.Write(data)
 	case http.MethodDelete:
 		repo, ok := h.svc.(*LocalService)
 		if !ok {
@@ -309,12 +309,12 @@ func (h *Handler) handleImportProfile(w http.ResponseWriter, r *http.Request) {
 func jsonOK(w http.ResponseWriter, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(data)
+	_ = json.NewEncoder(w).Encode(data)
 }
 
 // jsonError writes a JSON error response.
 func jsonError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]string{"error": message})
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
 }

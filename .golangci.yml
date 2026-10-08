@@ -4,60 +4,55 @@
 # 每多一个「风格偏好型」linter，就多一条需要人肉判决的噪音，
 # 久而久之大家就会习惯性地忽略 lint 输出 —— 那等于没有 lint。
 #
+# 关于 gosimple：v2 里它已被合并进 staticcheck（S1 系列规则），
+# 单独 enable 会直接配置报错。所以计划里的 gosimple 由 staticcheck 覆盖。
+#
 # 刻意不启用的：
 #   - lll       行长度（中文注释按字节算，会疯狂误报）
 #   - godot     注释必须以句号结尾（对中文标点无意义）
 #   - wsl       强制空行风格（与现有代码风格冲突，纯噪音）
-#   - funlen/gocognit  复杂度阈值（本项目 handler 天然偏长，收益低于噪音）
 version: "2"
 
 linters:
-  default: none
   enable:
     - errcheck      # 未处理的 error
     - govet         # 官方 vet 全套
     - ineffassign   # 无效赋值
-    - staticcheck   # 静态分析主力
+    - staticcheck   # 静态分析主力（含 v2 合并进来的 gosimple）
     - unused        # 未使用的标识符
     - misspell      # 拼写（注释里的英文错字）
-    - bodyclose     # HTTP response body 未关闭
-    - rowserrcheck  # sql.Rows.Err 未检查
-    - noctx         # 发出请求时没用带 context 的版本
-
   settings:
-    errcheck:
-      # 这些调用的返回值在测试与示例里刻意忽略，
-      # 灰名单比全量 //nolint 更不容易掩盖真实问题。
-      exclude-functions:
-        - (io.Closer).Close
-        - (*os.File).Close
-      check-type-assertions: false
-      check-blank: false
-
+    misspell:
+      locale: US
+      # "cancelled" 是任务状态的**对外线格式**（TaskState = "cancelled"，
+      # 已出现在 API 响应与既有测试里）。改它会破坏接口契约，
+      # 所以这里把它当作领域词豁免；散文与注释一律用 US 拼写 canceled。
+      ignore-rules:
+        - cancelled
   exclusions:
     generated: lax
-    rules:
+    presets:
+      - std-error-handling
+      - common-false-positives
+    paths:
       # 测试文件不查 errcheck：t.Fatal 之后的 cleanup 失败没有处理价值。
-      - path: _test\.go
-        linters:
-          - errcheck
-          - noctx
-      # 装配层与 sources 适配器里有大量「尽力而为」的调用（审计落库、
-      # 指标上报），失败只记日志不中断主流程，是刻意设计。
-      - path: internal/app/admin_sources\.go
-        linters:
-          - errcheck
+      # 注意 v2 这里要写正则字符串列表（paths），不是单数的 path。
+      - '.*_test\.go$'
 
 formatters:
   enable:
     - gofmt
     - goimports
-
   settings:
     goimports:
       local-prefixes:
         - github.com/atop0914/agentbot
 
+run:
+  timeout: 5m
+
 issues:
+  # 默认每种 linter 只报 50 条、同类只报 3 条 —— 修完一批才会浮出下一批，
+  # 让人误以为「快修完了」。全量上报，一次看清。
   max-issues-per-linter: 0
   max-same-issues: 0

@@ -171,7 +171,7 @@ func (h *MarketplaceHandler) handlePublish(w http.ResponseWriter, r *http.Reques
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(published)
+	_ = json.NewEncoder(w).Encode(published)
 }
 
 func (h *MarketplaceHandler) handleUnpublish(w http.ResponseWriter, r *http.Request, templateID string) {
@@ -205,7 +205,7 @@ func (h *MarketplaceHandler) handleInstall(w http.ResponseWriter, r *http.Reques
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(tmpl)
+	_ = json.NewEncoder(w).Encode(tmpl)
 }
 
 func (h *MarketplaceHandler) handleReviews(w http.ResponseWriter, r *http.Request, templateID string) {
@@ -231,7 +231,7 @@ func (h *MarketplaceHandler) handleReviews(w http.ResponseWriter, r *http.Reques
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(created)
+		_ = json.NewEncoder(w).Encode(created)
 	default:
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
@@ -273,5 +273,5 @@ func (h *MarketplaceHandler) handleStats(w http.ResponseWriter, r *http.Request)
 func jsonErr(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]string{"error": message})
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
