@@ -13,6 +13,11 @@
 - JWT 认证 + bcrypt 密码哈希
 - 零第三方 Web 框架与日志库：依赖只有 JWT、uuid、websocket、go-redis、x/crypto
 
+## 发布
+
+- **v1.0.0** — [Release 页面](https://github.com/atop0914/agentbot/releases/tag/v1.0.0)，
+  5 个平台二进制 + `checksums.txt`（sha256 与 GitHub 侧摘要一致）
+
 ## 项目结构
 
 ```
@@ -97,7 +102,7 @@ make lint         # golangci-lint（未安装时给出安装命令）
 校验注入是否生效：
 
 ```bash
-./bin/agentbot --version   # agentbot v1.0.0 (commit 2f6cc2e, built ..., go1.25.6, linux/amd64)
+./bin/agentbot --version   # agentbot v1.0.0 (commit 170eb51, built ..., go1.25.6, linux/amd64)
 ```
 
 ### 发版
