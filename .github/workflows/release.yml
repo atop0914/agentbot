@@ -1,0 +1,73 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  # 手动触发一次「只构建不发版」的演练，用于验证交叉编译矩阵没坏。
+  # 打 tag 才发现 matrix 写错、白占一个版本号，是最不值当的一类失误。
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: build and release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 交叉编译要用 git describe 推导版本号，浅克隆下拿不到 tag。
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Test before release
+        run: go test -short -race -count=1 ./...
+
+      - name: Build cross-platform binaries
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          commit="$(git rev-parse --short HEAD)"
+          date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          ldflags="-s -w \
+            -X github.com/atop0914/agentbot/internal/version.Version=${VERSION} \
+            -X github.com/atop0914/agentbot/internal/version.GitCommit=${commit} \
+            -X github.com/atop0914/agentbot/internal/version.BuildDate=${date}"
+          # windows/arm64 跳过：该组合的产物无人使用，却要占掉一次完整编译；
+          # CGO_ENABLED=0 保证产物是静态二进制，distroless 可直接运行。
+          for goos in linux darwin windows; do
+            for goarch in amd64 arm64; do
+              if [ "$goos" = "windows" ] && [ "$goarch" = "arm64" ]; then
+                continue
+              fi
+              ext=""
+              [ "$goos" = "windows" ] && ext=".exe"
+              name="agentbot_${VERSION}_${goos}_${goarch}"
+              echo "building ${name}"
+              GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 \
+                go build -trimpath -ldflags="$ldflags" \
+                -o "dist/${name}${ext}" ./cmd/agentbot
+            done
+          done
+          cd dist && sha256sum * > checksums.txt && ls -la
+
+      # 不能同时设 body_path 和 generate_release_notes（二者冲突，
+      # action 会以「body 与 generate_release_notes 互斥」报错）。
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

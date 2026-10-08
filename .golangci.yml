@@ -1,0 +1,63 @@
+# golangci-lint v2 配置。
+#
+# 启用标准集里真正能抓到 bug 的检查器，而不是把 linter 数开到最大：
+# 每多一个「风格偏好型」linter，就多一条需要人肉判决的噪音，
+# 久而久之大家就会习惯性地忽略 lint 输出 —— 那等于没有 lint。
+#
+# 刻意不启用的：
+#   - lll       行长度（中文注释按字节算，会疯狂误报）
+#   - godot     注释必须以句号结尾（对中文标点无意义）
+#   - wsl       强制空行风格（与现有代码风格冲突，纯噪音）
+#   - funlen/gocognit  复杂度阈值（本项目 handler 天然偏长，收益低于噪音）
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck      # 未处理的 error
+    - govet         # 官方 vet 全套
+    - ineffassign   # 无效赋值
+    - staticcheck   # 静态分析主力
+    - unused        # 未使用的标识符
+    - misspell      # 拼写（注释里的英文错字）
+    - bodyclose     # HTTP response body 未关闭
+    - rowserrcheck  # sql.Rows.Err 未检查
+    - noctx         # 发出请求时没用带 context 的版本
+
+  settings:
+    errcheck:
+      # 这些调用的返回值在测试与示例里刻意忽略，
+      # 灰名单比全量 //nolint 更不容易掩盖真实问题。
+      exclude-functions:
+        - (io.Closer).Close
+        - (*os.File).Close
+      check-type-assertions: false
+      check-blank: false
+
+  exclusions:
+    generated: lax
+    rules:
+      # 测试文件不查 errcheck：t.Fatal 之后的 cleanup 失败没有处理价值。
+      - path: _test\.go
+        linters:
+          - errcheck
+          - noctx
+      # 装配层与 sources 适配器里有大量「尽力而为」的调用（审计落库、
+      # 指标上报），失败只记日志不中断主流程，是刻意设计。
+      - path: internal/app/admin_sources\.go
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/atop0914/agentbot
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

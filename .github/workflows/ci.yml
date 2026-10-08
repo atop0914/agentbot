@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (go ${{ matrix.go-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 与 go.mod 的 go 指令对齐：1.25 是当前最低要求。
+        # 不写 1.26 —— go.mod 声明 1.25.6 时，1.26 工具链要触发
+        # 工具链下载（GOTOOLCHAIN=auto），CI 会多花几十秒在下载上，
+        # 却不增加任何覆盖面。
+        go-version: ['1.25']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: true
+
+      - name: Verify dependencies are tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      # -short 是硬约束：容器相关测试（MySQL/Postgres via testcontainers）
+      # 在 GitHub runner 上要么拉镜像极慢、要么直接不可用。所有容器测试
+      # 都在测试函数内做了 testing.Short() 短路，这里必须带上标志，
+      # 否则 CI 会跑出一堆与代码质量无关的红。
+      - name: Test
+        run: go test -short -race -count=1 ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build -o /dev/null ./cmd/agentbot
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          # 与开发机保持一致（本地 v2.12.2）；v2 系列需要 action v6 + 显式版本。
+          version: v2.12.2
+          args: --timeout=5m
