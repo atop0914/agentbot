@@ -455,3 +455,32 @@ func TestServerAddrAndDSN(t *testing.T) {
 		t.Errorf("DSN must carry ssl_mode, got %q", dsn)
 	}
 }
+
+func TestValidate_EmptyRedisHostIsNotAnError(t *testing.T) {
+	// Redis 只是预留配置面（无代码 import go-redis，持久化仍是内存实现）。
+	// 显式写 redis.host="" 就是「我不用 Redis」的正常表达，不该拒绝启动。
+	cfg := validConfig()
+	cfg.Redis.Host = ""
+	cfg.Redis.Port = 0
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("an absent Redis must not block startup, got: %v", err)
+	}
+}
+
+func TestValidate_RejectsRedisPortOutOfRangeWhenConfigured(t *testing.T) {
+	// 反向断言：真的配了 Redis 就必须给可用端口，否则连接串会指向死地址。
+	for _, port := range []int{-1, 0, 70000} {
+		cfg := validConfig()
+		cfg.Redis.Host = "cache.internal"
+		cfg.Redis.Port = port
+
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatalf("redis.port=%d must be rejected when a host is configured", port)
+		}
+		if !strings.Contains(err.Error(), "redis.port") {
+			t.Errorf("redis.port=%d: expected a redis.port complaint, got: %v", port, err)
+		}
+	}
+}

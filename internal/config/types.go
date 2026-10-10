@@ -331,8 +331,15 @@ func (c Config) Validate() error {
 		problems = append(problems, fmt.Sprintf(
 			"database.ssl_mode %q is not a valid PostgreSQL sslmode", c.Database.SSLMode))
 	}
-	if c.Redis.Host == "" {
-		problems = append(problems, "redis.host is required")
+	// Redis 目前只是一个**预留的配置面**：没有任何代码路径 import go-redis，
+	// 持久化仍是内存实现。因此 redis.host 为空表示「未配置 Redis」，是合法状态；
+	// 若把非空校验留在这里，用户显式写 redis.host="" 时反而会被拒绝 ——
+	// 那恰好是「我不用 Redis」的正确表达。
+	// 仅当**配了** host 时才校验端口是否可用。
+	if c.Redis.Host != "" {
+		if c.Redis.Port < 1 || c.Redis.Port > 65535 {
+			problems = append(problems, fmt.Sprintf("redis.port out of range: %d", c.Redis.Port))
+		}
 	}
 
 	// --- 日志 / 指标 ---
