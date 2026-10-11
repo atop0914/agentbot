@@ -80,6 +80,18 @@ func (c DatabaseConfig) DSN() string {
 		c.User, c.Password, c.Host, c.Port, c.DBName, c.SSLMode)
 }
 
+// Configured 表示这个部署是否声明了要使用关系型数据库。
+//
+// 判定只看 host：没写 host 就是「我用内存后端」（见 docs/persistence.md
+// 第 3 节）。这是配置层与装配层共用的唯一判定口径 —— 两处各写一份
+// 会出现「校验说配了、装配说没配」这种最难查的分歧。
+func (c DatabaseConfig) Configured() bool {
+	return strings.TrimSpace(c.Host) != ""
+}
+
+// DatabaseConfigured 是 Config 上的便利方法，供 Validate 使用。
+func (c Config) DatabaseConfigured() bool { return c.Database.Configured() }
+
 // RedisConfig 是 Redis 配置。
 type RedisConfig struct {
 	Host     string `json:"host"`
@@ -183,6 +195,13 @@ type StorageConfig struct {
 	S3Bucket   string `json:"s3_bucket,omitempty"`
 	S3Region   string `json:"s3_region,omitempty"`
 	S3Endpoint string `json:"s3_endpoint,omitempty"`
+	// AllowMemoryFallback 决定「配了数据库但连不上」时的行为。
+	//
+	// 默认 false（拒绝启动）。静默降级到内存是最坏的一种失败：
+	// 调用方看到的是 201 Created，没有任何信号告诉它数据只活在进程里，
+	// 重启即消失。确实需要降级的场景（本地演示、无 PG 的 CI）
+	// 必须显式打开，且启动日志会以 ERROR 级别把它喊出来。
+	AllowMemoryFallback bool `json:"allow_memory_fallback"`
 }
 
 // AdminConfig 是管理控制台配置。
@@ -275,9 +294,18 @@ func Default() Config {
 func DevelopmentDefault() Config {
 	cfg := Default()
 	cfg.Auth.JWTSecret = "agentbot-development-only-secret-0000000000000000"
-	// 数据库在开发期不是必需依赖（当前存储实现是内存仓库），
-	// 但装配层统一要求非空，所以给一个明确表述「本地」的值。
-	cfg.Database.Password = "agentbot-development-only-db-password"
+	// 数据库在开发期**不是依赖**：存储实现仍是内存仓库（见 docs/persistence.md）。
+	//
+	// 这里必须把 host 清空，而不是只塞一个假密码。只塞假密码会留下
+	// host=localhost + 假密码的组合，而那个组合现在会被装配层当作
+	// 「配置了数据库」→ 尝试连接 → SASL 认证失败 → 拒绝启动。
+	// 症状是 `go test` 与本机 `go run` 全都在启动阶段炸掉，
+	// 而真正的原因（默认配置声明了一个自己连不上的数据库）很隐蔽。
+	//
+	// 清空 host 的语义是准确的：开发默认配置就是「没有数据库」。
+	cfg.Database.Host = ""
+	cfg.Database.DBName = ""
+	cfg.Database.Password = ""
 	cfg.FileSystem.Root = "/tmp/agentbot-fs"
 	cfg.Storage.LocalPath = "/tmp/agentbot-storage"
 	cfg.Admin.ConsoleDir = "web/admin/dist"
@@ -302,7 +330,10 @@ func (c Config) Validate() error {
 			"auth.jwt_secret is too short: %d bytes, need at least %d",
 			len(c.Auth.JWTSecret), MinJWTSecretLength))
 	}
-	if isPlaceholderSecret(c.Database.Password) {
+	// 数据库密码只在**确实配置了数据库**时才算机密：没配 host 就是
+	// 「我用内存后端」，此时没有密码要保护，要求它非空只会让
+	// 内存后端（单测 / 本地演示 / 无 PG 的 CI）无法启动。
+	if c.DatabaseConfigured() && isPlaceholderSecret(c.Database.Password) {
 		problems = append(problems,
 			"database.password is required (set "+EnvPrefix+"DATABASE_PASSWORD)")
 	}
@@ -319,17 +350,25 @@ func (c Config) Validate() error {
 	}
 
 	// --- 依赖服务 ---
-	if c.Database.Host == "" {
-		problems = append(problems, "database.host is required")
-	}
-	if c.Database.DBName == "" {
-		problems = append(problems, "database.db_name is required")
-	}
-	switch c.Database.SSLMode {
-	case "disable", "require", "verify-ca", "verify-full":
-	default:
-		problems = append(problems, fmt.Sprintf(
-			"database.ssl_mode %q is not a valid PostgreSQL sslmode", c.Database.SSLMode))
+	// 数据库是**可选**依赖：不配 Database.Host 表示「这个部署用内存后端」，
+	// 是合法状态（见 docs/persistence.md 第 3 节的决策表）。
+	//
+	// 这里刻意不要求 host 非空：把「没配数据库」判为配置错误会让内存后端
+	// 在真实部署里根本无法抵达 —— 而内存后端是单元测试、本地演示与
+	// 无 PG 的 CI 的正常形态。**配了**才校验其余字段的合法性。
+	if c.DatabaseConfigured() {
+		if c.Database.DBName == "" {
+			problems = append(problems, "database.db_name is required when database.host is set")
+		}
+		switch c.Database.SSLMode {
+		case "disable", "require", "verify-ca", "verify-full":
+		default:
+			problems = append(problems, fmt.Sprintf(
+				"database.ssl_mode %q is not a valid PostgreSQL sslmode", c.Database.SSLMode))
+		}
+		if c.Database.Port < 1 || c.Database.Port > 65535 {
+			problems = append(problems, fmt.Sprintf("database.port out of range: %d", c.Database.Port))
+		}
 	}
 	// Redis 目前只是一个**预留的配置面**：没有任何代码路径 import go-redis，
 	// 持久化仍是内存实现。因此 redis.host 为空表示「未配置 Redis」，是合法状态；

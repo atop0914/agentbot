@@ -23,6 +23,7 @@ import (
 	"github.com/atop0914/agentbot/internal/network"
 	"github.com/atop0914/agentbot/internal/role"
 	"github.com/atop0914/agentbot/internal/sso"
+	"github.com/atop0914/agentbot/internal/storage"
 	"github.com/atop0914/agentbot/internal/template"
 	"github.com/atop0914/agentbot/internal/tenant"
 	"github.com/atop0914/agentbot/internal/terminal"
@@ -84,6 +85,15 @@ type App struct {
 	// 企业 SSO / OIDC（Day 27）
 	SSOSvc sso.Service
 	SSOH   *sso.Handler
+	// 持久化后端（Day 3-3）。Storage 为 nil 表示内存后端。
+	//
+	// 两个字段而不是一个：Storage 是连接句柄（没有数据库时为 nil），
+	// StorageBackend 是**标识**（永远是 postgres 或 memory 之一）。
+	// 合成一个字段的话，调用方就无法区分「后端是内存」与「字段没赋值」。
+	Storage        *storage.DB
+	StorageBackend string
+	// DB 与 Storage 指向同一句柄，别名保留给「取底层 *sql.DB」的调用点。
+	DB *storage.DB
 }
 
 // New creates a new App with all in-memory services wired up.

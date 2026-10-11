@@ -113,11 +113,12 @@ type fileMetrics struct {
 }
 
 type fileStorage struct {
-	Provider   *string `json:"provider"`
-	LocalPath  *string `json:"local_path"`
-	S3Bucket   *string `json:"s3_bucket"`
-	S3Region   *string `json:"s3_region"`
-	S3Endpoint *string `json:"s3_endpoint"`
+	Provider            *string `json:"provider"`
+	LocalPath           *string `json:"local_path"`
+	S3Bucket            *string `json:"s3_bucket"`
+	S3Region            *string `json:"s3_region"`
+	S3Endpoint          *string `json:"s3_endpoint"`
+	AllowMemoryFallback *bool   `json:"allow_memory_fallback"`
 }
 
 type fileAdmin struct {
@@ -215,6 +216,7 @@ func (f *fileConfig) applyTo(c *Config) {
 		setStr(f.Storage.S3Bucket, &c.Storage.S3Bucket)
 		setStr(f.Storage.S3Region, &c.Storage.S3Region)
 		setStr(f.Storage.S3Endpoint, &c.Storage.S3Endpoint)
+		setBool(f.Storage.AllowMemoryFallback, &c.Storage.AllowMemoryFallback)
 	}
 	if f.Admin != nil {
 		setStr(f.Admin.ConsoleDir, &c.Admin.ConsoleDir)

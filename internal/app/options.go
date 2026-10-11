@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"os"
@@ -64,7 +65,35 @@ func NewWithConfig(cfg config.Config) (*App, error) {
 		return nil, errors.Join(errFileSystemRootUnavailable, err)
 	}
 
-	return build(cfg, logger)
+	// 选择持久化后端。这是一个**全局一次性**决策，必须先于任何仓库构造 ——
+	// 一旦有仓库先按内存建好，后面的选择就只能是「部分仓库用 Postgres」，
+	// 而这种混合状态无法从外部观察（见 docs/persistence.md 第 3 节）。
+	sel, err := selectStorage(context.Background(), cfg)
+	if err != nil {
+		return nil, err
+	}
+	logger.Info("persistence backend selected",
+		"storage.backend", sel.backend,
+		"storage.host", storageHostForLog(cfg),
+		"storage.fallback_allowed", cfg.Storage.AllowMemoryFallback)
+
+	a, err := build(cfg, logger)
+	if err != nil {
+		// build 失败时装配未完成，DB 的所有权还在本函数手上 —— 必须关掉，
+		// 否则每次启动失败都会漏一个连接池。
+		if sel.db != nil {
+			_ = sel.db.Close()
+		}
+		return nil, err
+	}
+
+	// 所有权移交：从这里起由 App 持有，调用方负责 Close。
+	// 注意**不能**用 defer 关它 —— 那会在 NewWithConfig 返回的瞬间
+	// 把刚交给 App 的句柄关掉，症状是「装配成功但一用就 database is closed」。
+	a.Storage = sel.db
+	a.StorageBackend = sel.backend
+	a.DB = sel.db
+	return a, nil
 }
 
 // newLogger 按配置构造 slog 日志器。

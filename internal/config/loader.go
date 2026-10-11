@@ -192,6 +192,7 @@ func applyEnv(cfg *Config, lookup func(string) (string, bool)) error {
 	s.str(EnvPrefix+"STORAGE_S3_BUCKET", &cfg.Storage.S3Bucket)
 	s.str(EnvPrefix+"STORAGE_S3_REGION", &cfg.Storage.S3Region)
 	s.str(EnvPrefix+"STORAGE_S3_ENDPOINT", &cfg.Storage.S3Endpoint)
+	s.bool(EnvPrefix+"STORAGE_ALLOW_MEMORY_FALLBACK", &cfg.Storage.AllowMemoryFallback)
 
 	// admin
 	s.str(EnvPrefix+"ADMIN_CONSOLE_DIR", &cfg.Admin.ConsoleDir)
