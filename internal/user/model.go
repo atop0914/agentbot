@@ -1,6 +1,7 @@
 package user
 
 import (
+	"errors"
 	"time"
 )
 
@@ -90,6 +91,21 @@ type OAuthCallbackRequest struct {
 	Code  string `json:"code" validate:"required"`
 	State string `json:"state" validate:"required"`
 }
+
+// 用户模块的哨兵错误。
+//
+// 做成哨兵（而不是裸的 fmt.Errorf 字符串）是为了让 handler 能用
+// errors.Is 稳定地映射状态码 —— 靠匹配错误文本会在文案一改就静默
+// 退化成 500，而 500 与 409 对调用方的含义完全不同（「稍后重试」
+// vs「换个邮箱」）。
+var (
+	// ErrEmailExists 表示邮箱已被占用。
+	ErrEmailExists = errors.New("user: email already exists")
+	// ErrUsernameExists 表示用户名已被占用。
+	ErrUsernameExists = errors.New("user: username already exists")
+	// ErrNotFound 表示指定用户不存在。
+	ErrNotFound = errors.New("user: not found")
+)
 
 // Repository 用户数据访问接口
 type Repository interface {

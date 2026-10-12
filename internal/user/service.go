@@ -26,7 +26,7 @@ func (s *UserService) Create(req *CreateUserRequest) (*User, error) {
 		return nil, fmt.Errorf("failed to check email: %w", err)
 	}
 	if existing != nil {
-		return nil, fmt.Errorf("email already exists")
+		return nil, ErrEmailExists
 	}
 
 	// 检查用户名是否已存在
@@ -35,7 +35,7 @@ func (s *UserService) Create(req *CreateUserRequest) (*User, error) {
 		return nil, fmt.Errorf("failed to check username: %w", err)
 	}
 	if existing != nil {
-		return nil, fmt.Errorf("username already exists")
+		return nil, ErrUsernameExists
 	}
 
 	// 哈希密码
@@ -83,7 +83,7 @@ func (s *UserService) Update(id string, req *UpdateUserRequest) (*User, error) {
 		return nil, err
 	}
 	if user == nil {
-		return nil, fmt.Errorf("user not found")
+		return nil, ErrNotFound
 	}
 
 	if req.Email != nil {
@@ -93,7 +93,7 @@ func (s *UserService) Update(id string, req *UpdateUserRequest) (*User, error) {
 			return nil, err
 		}
 		if existing != nil && existing.ID != id {
-			return nil, fmt.Errorf("email already exists")
+			return nil, ErrEmailExists
 		}
 		user.Email = *req.Email
 	}
@@ -105,7 +105,7 @@ func (s *UserService) Update(id string, req *UpdateUserRequest) (*User, error) {
 			return nil, err
 		}
 		if existing != nil && existing.ID != id {
-			return nil, fmt.Errorf("username already exists")
+			return nil, ErrUsernameExists
 		}
 		user.Username = *req.Username
 	}
@@ -197,7 +197,7 @@ func (s *UserService) SetStatus(id string, status Status) (*User, error) {
 		return nil, err
 	}
 	if user == nil {
-		return nil, fmt.Errorf("user not found")
+		return nil, ErrNotFound
 	}
 	if user.Status == status {
 		// 幂等：重复设置同一状态直接返回，避免产生无意义的 updated_at 变更。

@@ -2,6 +2,7 @@ package user
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 )
@@ -29,13 +30,15 @@ func (r *MemoryRepository) Create(user *User) error {
 		return fmt.Errorf("user %s already exists", user.ID)
 	}
 
-	// 检查邮箱唯一性
+	// 检查邮箱唯一性。
+	// 返回与 Postgres 实现**同一个**哨兵错误：两套后端的错误类型
+	// 一旦分叉，handler 的 409 映射就会只在其中一种后端上生效。
 	for _, u := range r.users {
 		if u.Email == user.Email {
-			return fmt.Errorf("email %s already exists", user.Email)
+			return ErrEmailExists
 		}
 		if u.Username == user.Username {
-			return fmt.Errorf("username %s already exists", user.Username)
+			return ErrUsernameExists
 		}
 	}
 
@@ -97,6 +100,17 @@ func (r *MemoryRepository) GetByUsername(username string) (*User, error) {
 
 // GetByOAuth 根据 OAuth 信息获取用户
 func (r *MemoryRepository) GetByOAuth(provider, oauthID string) (*User, error) {
+	// 两个字段都为空时必须直接返回 nil，不能进循环。
+	//
+	// 未绑定 OAuth 的用户在存储里是两列空串，而「多条空串共存」是
+	// 合法形态（Postgres 侧靠部分索引实现）。若这里拿空串去匹配，
+	// 会因为 map 遍历顺序随机而**随机命中**其中一个未绑定账号 ——
+	// 症状是第三方登录把用户登成另一个人：不报错、不失败，
+	// 只是身份变成了别人的。契约测试抓到的正是这一条。
+	if provider == "" || oauthID == "" {
+		return nil, nil
+	}
+
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -146,6 +160,18 @@ func (r *MemoryRepository) List(offset, limit int) ([]*User, int, error) {
 		copy := *u
 		all = append(all, &copy)
 	}
+
+	// 必须排序：Go 的 map 迭代顺序是随机的，直接返回会让
+	// 「带 offset 的分页」每次拿到不同的切片 —— 表现为某一页重复出现
+	// 上一页的行、另一页永远看不到，且同一参数的两次查询结果不同。
+	// 排序键用 (CreatedAt DESC, ID DESC) 与 Postgres 实现保持一致，
+	// 保证两套后端下分页顺序也相同（否则换后端会让前端翻页错乱）。
+	sort.Slice(all, func(i, j int) bool {
+		if !all[i].CreatedAt.Equal(all[j].CreatedAt) {
+			return all[i].CreatedAt.After(all[j].CreatedAt)
+		}
+		return all[i].ID > all[j].ID
+	})
 
 	if offset >= total {
 		return []*User{}, total, nil
