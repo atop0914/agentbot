@@ -77,7 +77,7 @@ func NewWithConfig(cfg config.Config) (*App, error) {
 		"storage.host", storageHostForLog(cfg),
 		"storage.fallback_allowed", cfg.Storage.AllowMemoryFallback)
 
-	a, err := build(cfg, logger)
+	a, err := build(cfg, logger, sel.db)
 	if err != nil {
 		// build 失败时装配未完成，DB 的所有权还在本函数手上 —— 必须关掉，
 		// 否则每次启动失败都会漏一个连接池。

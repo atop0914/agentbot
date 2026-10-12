@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"database/sql"
 	"log/slog"
 	"net/http"
 	"time"
@@ -108,9 +109,25 @@ type App struct {
 // 之前的版本在 app.New() 里硬编码了 `Secret: "dev-secret-change-in-production"`，
 // 那是一行「开发方便、生产致命」的代码：任何部署只要忘了注入密钥就会
 // 带着一个公开可伪造的密钥跑起来，而且完全不报错。
-func build(cfg config.Config, logger *slog.Logger) (*App, error) {
-	// User service (in-memory)
-	userRepo := user.NewMemoryRepository()
+func build(cfg config.Config, logger *slog.Logger, db *storage.DB) (*App, error) {
+	// 持久化后端在这里落地：db 为 nil 表示内存后端，否则用 Postgres 实现。
+	//
+	// 为什么把 *storage.DB 显式传进来，而不是在 build 里再判断一次配置：
+	// 「用哪个后端」是一个**全局一次性**决策，必须在 options.go 里做完
+	// 并贯彻到底。若 build 自己再读一遍配置，就会产出「选择器说内存、
+	// 装配层说 postgres」这类最难查的分歧（3-3 那轮踩过：
+	// 配置层与装配层各写一份判定，两边对不上）。
+	dbHandle := sqlDB(db)
+
+	// User service：配了数据库就用 Postgres 实现，否则内存。
+	// 内存实现**不删除** —— 它是回退路径，且被契约测试持续覆盖。
+	var userRepo user.Repository
+	if dbHandle != nil {
+		userRepo = user.NewPostgresRepository(dbHandle)
+		logger.Debug("user repository backed by postgres")
+	} else {
+		userRepo = user.NewMemoryRepository()
+	}
 	userSvc := user.NewUserService(userRepo)
 
 	// Auth service
@@ -223,7 +240,16 @@ func build(cfg config.Config, logger *slog.Logger) (*App, error) {
 	monitorRepo := monitor.NewMemoryRepository()
 
 	// Audit log (需要早于监控装配：告警处置要落审计)
-	auditRepo := audit.NewMemoryRepository()
+	//
+	// 审计是**最不能丢**的一类数据：它是取证依据，进程重启后
+	// 内存里的审计记录会全部消失。因此这里与 user 一样优先用 Postgres。
+	var auditRepo audit.Repository
+	if dbHandle != nil {
+		auditRepo = audit.NewPostgresRepository(dbHandle)
+		logger.Debug("audit repository backed by postgres")
+	} else {
+		auditRepo = audit.NewMemoryRepository()
+	}
 	auditSvc := audit.NewService(auditRepo)
 	// 留存策略：默认 90 天。挂在 handler 上后 /retention 系列接口可用。
 	auditRetention := audit.NewRetentionService(auditSvc)
@@ -386,4 +412,16 @@ func build(cfg config.Config, logger *slog.Logger) (*App, error) {
 		SSOSvc:       ssoSvc,
 		SSOH:         ssoH,
 	}, nil
+}
+
+// sqlDB 从 storage 句柄取出 *sql.DB，nil 安全。
+//
+// 单独抽一个函数是为了让「没有数据库」这一情形在所有仓库构造点
+// 有**同一个**表达（nil *sql.DB），而不是让每处各自写
+// `if db != nil { db.SQL() }` —— 一处漏判就是一次空指针崩溃。
+func sqlDB(db *storage.DB) *sql.DB {
+	if db == nil {
+		return nil
+	}
+	return db.SQL()
 }
