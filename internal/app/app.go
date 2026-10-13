@@ -143,8 +143,19 @@ func build(cfg config.Config, logger *slog.Logger, db *storage.DB) (*App, error)
 	authHandler := auth.NewHandler(authSvc)
 	authMW := auth.NewMiddleware(authSvc)
 
-	// Agent service
-	agentRepo := agent.NewMemoryRepository()
+	// Agent service：与 user/audit 同一口径 —— 配了数据库就用 Postgres 实现，
+	// 否则内存。内存实现保留为回退路径且被契约测试持续覆盖。
+	//
+	// Agent 比用户更需要这一层：用户丢了还能重新注册，而 Agent 是资源主体，
+	// 它的配置、状态机位置与容器绑定点丢了就是丢了 —— 进程重启后
+	// 全部 Agent 变成 idle 且配置清空，这在生产上等同于把所有工作负载重置。
+	var agentRepo agent.Repository
+	if dbHandle != nil {
+		agentRepo = agent.NewPostgresRepository(dbHandle)
+		logger.Debug("agent repository backed by postgres")
+	} else {
+		agentRepo = agent.NewMemoryRepository()
+	}
 	agentSvc := agent.NewService(agentRepo)
 	agentH := agent.NewHandler(agentSvc)
 
