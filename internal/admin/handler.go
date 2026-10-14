@@ -201,23 +201,29 @@ func (h *Handler) handleStatic(w http.ResponseWriter, r *http.Request) {
 		rel = "index.html"
 	}
 
-	target, ok := h.resolveStaticFile(rel)
-	if !ok {
-		h.servePlaceholder(w, rel)
+	// 命中真实文件：直接返回。
+	if target, ok := h.resolveStaticFile(rel); ok {
+		http.ServeFile(w, r, target)
 		return
 	}
 
-	// /admin/foo 这类无扩展名的深层路由交给前端 SPA 处理。
-	if _, err := os.Stat(target); err != nil && filepath.Ext(rel) == "" {
-		index, indexOK := h.resolveStaticFile("index.html")
-		if indexOK {
+	// 未命中文件：无扩展名的路径视为前端路由，回落到 index.html（SPA fallback），
+	// 让用户在 /admin/agents 这类子页面刷新时仍能拿到控制台。
+	//
+	// 这里必须**在 resolveStaticFile 失败之后**判断，而不是像早先那样先判
+	// 「ok 则直接返回」再 Checksum 一次 os.Stat：resolveStaticFile 内部已经
+	// 做过 os.Stat 且失败即返回 false，因此紧随其后的 `os.Stat(target) != nil`
+	// 永远为假 —— 整段 SPA 回落曾经是**不可达的死代码**，
+	// 表现为「产物已构建、首页正常、但子页面刷新拿到占位页」。
+	if filepath.Ext(rel) == "" {
+		if index, indexOK := h.resolveStaticFile("index.html"); indexOK {
 			http.ServeFile(w, r, index)
 			return
 		}
-		h.servePlaceholder(w, rel)
-		return
 	}
-	http.ServeFile(w, r, target)
+
+	// 静态目录未挂载 / 产物确实不存在：占位页（200，不是 404）。
+	h.servePlaceholder(w, rel)
 }
 
 // resolveStaticFile 把 URL 相对路径映射为磁盘路径，并做目录逃逸防护。

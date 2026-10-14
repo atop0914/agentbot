@@ -43,6 +43,23 @@ func newTestEnv(t *testing.T) *testEnv {
 	t.Cleanup(ts.Close)
 
 	env := &testEnv{t: t, server: ts, app: a}
+	env.bootstrapAdmin(t)
+	return env
+}
+
+// bootstrapAdmin 在已启动的 env 上注册一个用户并授予 coordinator 角色。
+//
+// 从 newTestEnv 里抽出来，是为了让「自带配置构造的 App」（如 Day 3-6 的
+// 静态托管测试，需要把 console_dir 指向真实 dist）也能复用同一套授权流程，
+// 而不必复制 40 行注册/登录/授权代码 —— 复制的版本会在 auth 响应形状变化时
+// 只被修一半。
+//
+// 必须作用在**同一个 App 实例**上：授权状态是进程内的，
+// 在另一个实例上授予角色对发出请求的这个实例无效（会被授权层 403 拦掉）。
+func (e *testEnv) bootstrapAdmin(t *testing.T) {
+	t.Helper()
+	ts := e.server
+	a := e.app
 
 	// 1. 注册一个用户（注册接口是公开路由）。
 	email := fmt.Sprintf("admin-%d@example.com", time.Now().UnixNano())
@@ -84,16 +101,14 @@ func newTestEnv(t *testing.T) *testEnv {
 	if reg.User.ID == "" {
 		t.Fatal("could not determine the admin user id from register/login responses")
 	}
-	env.token = reg.AccessToken
-	env.adminID = reg.User.ID
+	e.token = reg.AccessToken
+	e.adminID = reg.User.ID
 
 	// 2. 直接把 coordinator 角色授予该用户（走装配好的 authz 服务）。
 	subject := authz.Subject{Type: authz.SubjectUser, ID: reg.User.ID}
 	if _, err := a.AuthzSvc.Assign(context.Background(), subject, "role-coordinator", "test-bootstrap"); err != nil {
 		t.Fatalf("assign coordinator role: %v", err)
 	}
-
-	return env
 }
 
 // do 发送带认证的请求。

@@ -375,7 +375,20 @@ func build(cfg config.Config, logger *slog.Logger, db *storage.DB) (*App, error)
 		Users:   adminUserSource{svc: userSvc},
 		Authz:   adminAuthzSource{svc: authzSvc},
 	}
-	adminSvc := admin.NewService(adminSources, version.Version)
+	// 静态产物目录必须经 WithStaticDir 传给 **Service**，不能只传给 Handler。
+	//
+	// 踩过的坑：原先只写了 `admin.NewHandler(adminSvc, cfg.Admin.ConsoleDir)`，
+	// 看上去配置生效了 —— Handler 确实拿到了正确的目录，静态文件的读写也正常。
+	// 但 Service 在自己内部硬编码了 "web/admin/dist"，而
+	//   - GET /api/v1/admin/static
+	//   - snapshot 的 static 分区
+	// 两者读的都是 **Service** 的 staticInfo。于是容器部署
+	// （console_dir=/srv/agentbot/web）时控制台会一直声称
+	// 「产物尚未构建」，而页面其实是好的 —— 报表撒谎，不是页面坏了。
+	//
+	// WithStaticDir 会在 NewService 内部重新 probeStatic，因此
+	// 「配置里写了哪个目录」与「控制台报告的状态」从此是同一份事实。
+	adminSvc := admin.NewService(adminSources, version.Version, admin.WithStaticDir(cfg.Admin.ConsoleDir))
 	adminH := admin.NewHandler(adminSvc, cfg.Admin.ConsoleDir)
 
 	return &App{
