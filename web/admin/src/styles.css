@@ -1,0 +1,319 @@
+/* AgentBot 管理控制台样式。
+ *
+ * 刻意不引 UI 框架（antd / MUI 等）：控制台只展示只读聚合数据，
+ * 引入框架会让 node_modules 从 68 个包涨到上千个，且产物要入库分发。
+ * 纯 CSS 约 200 行即可覆盖全部需求。 */
+
+:root {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --border: #e3e6ea;
+  --text: #1f2328;
+  --muted: #6b7280;
+  --accent: #2563eb;
+  --ok: #15803d;
+  --warn: #b45309;
+  --danger: #b91c1c;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+code,
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+}
+
+.app {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 20px 40px;
+}
+
+.app-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 20px 0 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.app-header h1 {
+  font-size: 20px;
+  margin: 0;
+}
+
+.version {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.app-footer {
+  margin-top: 28px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0;
+}
+
+.section {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 16px 18px;
+  margin-bottom: 16px;
+}
+
+.section h2 {
+  font-size: 15px;
+  margin: 0 0 12px;
+}
+
+.section h3 {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 16px 0 8px;
+  font-weight: 600;
+}
+
+/* 分区取数失败：用边框 + 背景区分于「无数据」，两者含义完全不同。 */
+.section-error {
+  color: var(--danger);
+  background: #fef2f2;
+  border-left: 3px solid var(--danger);
+  padding: 8px 10px;
+  margin: 0;
+  border-radius: 3px;
+}
+
+.section-warning {
+  color: var(--warn);
+  background: #fffbeb;
+  border-left: 3px solid var(--warn);
+  padding: 8px 10px;
+  margin: 0 0 12px;
+  border-radius: 3px;
+}
+
+.banner {
+  padding: 10px 14px;
+  border-radius: 6px;
+  margin-bottom: 16px;
+}
+
+.banner-warn {
+  background: #fffbeb;
+  color: var(--warn);
+  border: 1px solid #fde68a;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.ok {
+  color: var(--ok);
+}
+
+.warn {
+  color: var(--warn);
+}
+
+.danger {
+  color: var(--danger);
+}
+
+.stat-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.stat {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 10px 14px;
+  min-width: 104px;
+}
+
+.stat-value {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.stat-warn .stat-value {
+  color: var(--warn);
+}
+
+.stat-danger .stat-value {
+  color: var(--danger);
+}
+
+.stat-ok .stat-value {
+  color: var(--ok);
+}
+
+.two-col {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 20px;
+}
+
+table.dist {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+table.dist th {
+  text-align: left;
+  font-weight: 500;
+  padding: 4px 8px 4px 0;
+  white-space: nowrap;
+}
+
+table.dist .dist-bar-cell {
+  width: 60%;
+  padding: 0 10px;
+}
+
+.dist-bar {
+  display: block;
+  height: 10px;
+  background: var(--accent);
+  opacity: 0.65;
+  border-radius: 2px;
+}
+
+.dist-count {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+table.list {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+table.list th,
+table.list td {
+  text-align: left;
+  padding: 6px 10px 6px 0;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+table.list thead th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sev {
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 12px;
+}
+
+.sev-critical,
+.sev-high {
+  color: var(--danger);
+}
+
+.sev-medium,
+.sev-warning {
+  color: var(--warn);
+}
+
+.sev-low,
+.sev-info {
+  color: var(--muted);
+}
+
+.chips {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0;
+  margin: 0;
+}
+
+.chip {
+  font-size: 12px;
+  padding: 2px 9px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+}
+
+.chip-on {
+  background: #ecfdf5;
+  color: var(--ok);
+  border-color: #a7f3d0;
+}
+
+.chip-off {
+  background: var(--bg);
+  color: var(--muted);
+}
+
+.token-form {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.token-form input {
+  flex: 1 1 320px;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: ui-monospace, monospace;
+  font-size: 12.5px;
+}
+
+button {
+  padding: 6px 13px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

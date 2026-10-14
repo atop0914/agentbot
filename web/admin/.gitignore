@@ -1,0 +1,12 @@
+# 依赖目录绝不入库（npm install 每次可重建）。
+node_modules/
+
+# 注意：dist/ 是**故意入库**的 —— 见 README.md「dist 是否入库」一节。
+# 服务端托管的就是 web/admin/dist，产物入库后
+#   1) 二进制分发者无需 Node 工具链即可看到真实控制台；
+#   2) CI 的 Go 测试（断言 /admin/* 返回真实页面而非占位页）不依赖 npm 环境。
+# 因此这里**不要**加 dist/ 忽略规则。
+
+# TypeScript 增量构建信息：机器相关的缓存，入库只会造成无意义的 diff。
+tsconfig.tsbuildinfo
+*.tsbuildinfo
