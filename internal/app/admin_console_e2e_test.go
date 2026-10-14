@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -281,4 +282,51 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…(截断)"
+}
+
+// TestAdminSnapshotStaticPartitionReportsConfiguredDir 断言 snapshot 的
+// static 分区报告的是**配置里那个目录**，而不是 admin 包内部的硬编码默认值。
+//
+// 这条是 WithStaticDir 修复的回归测试。踩过的坑：
+// admin.NewService 内部硬编码 staticDir="web/admin/dist"，而
+// /api/v1/admin/static 与 snapshot 的 static 分区读的都是 **Service** 的
+// staticInfo。装配层若只把 console_dir 传给 Handler，容器部署
+// （console_dir=/srv/agentbot/web）时控制台会一直显示「产物尚未构建」，
+// 而页面其实是好的 —— 报表与事实不符，且不报任何错。
+func TestAdminSnapshotStaticPartitionReportsConfiguredDir(t *testing.T) {
+	dir := repoFile(t, consoleDistDir)
+	if _, err := os.Stat(filepath.Join(dir, "index.html")); err != nil {
+		t.Skipf("前端产物缺失，跳过 static 分区验证: %v", err)
+	}
+	env := newConsoleAdminEnv(t, dir)
+
+	resp := env.do(http.MethodGet, "/api/v1/admin/snapshot", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+
+	var snap struct {
+		Static *struct {
+			Dir         string `json:"dir"`
+			Mounted     bool   `json:"mounted"`
+			IndexExists bool   `json:"index_exists"`
+			Message     string `json:"message"`
+		} `json:"static"`
+	}
+	if err := json.Unmarshal(body, &snap); err != nil {
+		t.Fatalf("decode snapshot: %v", err)
+	}
+	if snap.Static == nil {
+		t.Fatalf("snapshot 缺少 static 分区（errors=%s）", truncate(string(body), 300))
+	}
+	if snap.Static.Dir != dir {
+		t.Errorf("static.dir = %q, want %q —— Service 在报告硬编码默认值而非配置值",
+			snap.Static.Dir, dir)
+	}
+	if !snap.Static.Mounted || !snap.Static.IndexExists {
+		t.Errorf("配置指向真实 dist，应报告已挂载：mounted=%v index_exists=%v message=%q",
+			snap.Static.Mounted, snap.Static.IndexExists, snap.Static.Message)
+	}
 }

@@ -75,6 +75,7 @@ agentbot/
 - [x] 审计日志（查询、聚合、导出、清理）
 - [x] 网络出口路由（出口策略 + 代理网关 + 出站流量审计）
 - [x] 管理后台服务端（聚合视图 + 配置 + 静态资源托管）
+- [x] 管理控制台前端（React 18 + Vite 5，产物入库并由 `/admin/*` 托管）
 - [x] 实时通信（WebSocket）
 - [x] 多租户隔离 + 企业 SSO（OIDC）
 - [x] 配置分层 + 机密 fail-fast 启动校验
@@ -84,10 +85,9 @@ agentbot/
 
 ### 规划中
 
-- [ ] PostgreSQL 持久化（当前为内存实现）
-- [ ] Redis 缓存与分布式锁
+- [ ] PostgreSQL 持久化（已落地 audit / user / agent 三个仓库，其余待迁）
+- [ ] Redis 缓存与分布式锁（配置面已存在，尚未落地真用途）
 - [ ] Agent 运行时（容器隔离，依赖 Docker）
-- [ ] 管理后台前端（React 构建产物挂载到 `/admin/*`）
 
 ## 构建
 
@@ -104,6 +104,24 @@ make lint         # golangci-lint（未安装时给出安装命令）
 ```bash
 ./bin/agentbot --version   # agentbot v1.0.0 (commit 170eb51, built ..., go1.25.6, linux/amd64)
 ```
+
+### 管理控制台前端
+
+控制台在 `web/admin/`（React 18 + Vite 5），构建产物 `web/admin/dist` **有意入库**，
+由 Go 服务托管在 `/admin/*`。**纯后端改动与部署都不需要 Node** ——
+只有改了前端源码才需要：
+
+```bash
+make web-install   # 装依赖（仅首次 / package.json 变更后）
+make web-check     # 类型检查
+make web-build     # 构建产物（记得把 dist/ 一起提交）
+make web-dev       # 开发服务器，/api 代理到 :8080
+```
+
+`vite.config.ts` 的 `base: '/admin/'` 不能改成默认 `'/'`：那会让 index.html
+引用 `/assets/*.js`，浏览器 404 → 白屏，而 `npm run build` 完全成功。
+`TestAdminConsoleAssetPathsUseAdminBase` 就是为这条写的。
+详见 [web/admin/README.md](web/admin/README.md)。
 
 ### 发版
 

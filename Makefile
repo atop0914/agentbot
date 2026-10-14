@@ -85,6 +85,32 @@ run: ## 本地运行（需先导出 AUTH_JWT_SECRET / DATABASE_PASSWORD）
 .PHONY: clean
 clean: ## 清理构建产物
 	rm -rf bin dist
+	rm -rf web/admin/dist web/admin/tsconfig.tsbuildinfo
+
+# ===== 管理控制台前端（web/admin）=====
+#
+# dist/ 是**入库**的（理由见 web/admin/README.md），所以这里的目标不是
+# 「构建流程的一部分」，而是「改了前端源码后把产物同步更新」。
+# 唯一需要 npm 的场合就是改前端；纯后端改动与部署都不需要。
+
+WEB_DIR := web/admin
+
+.PHONY: web-install
+web-install: ## 安装前端依赖（仅改前端时需要）
+	cd $(WEB_DIR) && npm install --no-audit --no-fund
+
+.PHONY: web-build
+web-build: ## 构建控制台前端产物到 web/admin/dist（产物入库）
+	cd $(WEB_DIR) && npm run build
+	@echo "built $(WEB_DIR)/dist — 记得把 dist/ 一起提交（它是有意入库的）"
+
+.PHONY: web-check
+web-check: ## 前端类型检查
+	cd $(WEB_DIR) && npm run typecheck
+
+.PHONY: web-dev
+web-dev: ## 前端开发服务器（/api 代理到 :8080）
+	cd $(WEB_DIR) && npm run dev
 
 .PHONY: version
 version: ## 打印将被注入的版本三元组
