@@ -144,7 +144,7 @@ go test -short ./...        # 运行测试（-short 跳过依赖 Docker 的用�
 # 本地开发：显式注入一组仅用于本地的机密（生产路径不会这样跑）
 export AGENTBOT_AUTH_JWT_SECRET="$(openssl rand -base64 48)"
 export AGENTBOT_DATABASE_PASSWORD="$(openssl rand -base64 24)"
-go run ./cmd/agentbot        # 默认 :8080，指标 :9090
+go run ./cmd/agentbot        # 业务 :8080，指标 :9090
 
 # 容器编排
 cd deploy/docker && cp .env.example .env   # 填入两个机密
@@ -173,6 +173,8 @@ docker compose up -d
 
 ```
 GET    /health                        健康检查
+GET    /metrics                       指标（Prometheus 文本格式，匿名可达）
+                                      独立端口 :9090 提供同一份内容
 
 POST   /api/v1/auth/register          注册
 POST   /api/v1/auth/login             登录
@@ -198,6 +200,24 @@ POST   /api/v1/auth/login             登录
        /admin/*                        管理后台前端静态资源
        /api/v1/ws                      WebSocket 实时通道
 ```
+
+## 可观测性
+
+完整说明见 [docs/observability.md](docs/observability.md)。
+
+```
+GET /metrics        Prometheus 文本格式，**匿名可达**（抓取端不持有平台 JWT）
+                    :8080 与独立端口 :9090 提供**同一份**内容
+GET /health         健康检查
+```
+
+- **指标**：HTTP 请求数/延迟直方图/状态类、存储后端、panic 计数、进程 uptime。
+  `route` 标签是**路由模板**（`/api/v1/agents/{id}/start`）而非真实路径 ——
+  真实 ID 进标签值会让 Prometheus 内存随资源数线性膨胀。
+- **日志**：`AGENTBOT_LOG_LEVEL` 控制。成功的访问日志在 `debug`，
+  4xx 在 `warn`，5xx 在 `error` —— 默认级别下日志里只有启动信息与真正的错误。
+- **追踪**：`X-Request-ID` 会回传响应头（尊重上游传入的值），并写进 context，
+  业务代码用 `app.RequestIDFromContext(ctx)` 取到同一个值打日志。
 
 ## 开发约定
 

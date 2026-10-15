@@ -130,7 +130,13 @@ func NewRouter(a *App) http.Handler {
 
 	// 权限与认证在租户作用域之外：claims 先被解析出来，租户层才能用。
 	if a.AuthzSvc != nil {
-		authzMW := authz.NewMiddleware(a.AuthzSvc, authz.DefaultRouteTable())
+		// ⚠️ 必须把**配置的**指标路径传进权限表，不能依赖表里写死的 "/metrics"。
+		// 指标路径是配置项（AGENTBOT_METRICS_PATH），改配置后路由会挂到新路径，
+		// 而权限表若还只认老路径，新路径就落进默认拒绝 → 403 ——
+		// 表现为「按配置改了路径，指标端点整个不可用」。
+		// 这是「同一件事被两处各存一份」的又一例：改一处不报错，
+		// 只是那一处继续按旧值回答。
+		authzMW := authz.NewMiddleware(a.AuthzSvc, authz.PublicRouteTable([]string{a.MetricsPath()}))
 		authzMW.ResolveSubject = authzSubjectFromRequest
 		// 关键顺序：OptionalAuth 必须在 authz 的**外层**。
 		// Authorize 在主体为空时会直接返回 401 并短路，内层中间件永远不会执行；

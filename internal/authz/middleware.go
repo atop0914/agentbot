@@ -191,7 +191,45 @@ func isMoreSpecific(a, b RouteRule) bool {
 //   - 破坏类操作（删除/销毁）要求 *:delete 或 *:destroy；
 //   - 未登记的路径不在此表中 → 中间件默认拒绝（默认拒绝原则）。
 func DefaultRouteTable() *RouteTable {
-	return NewRouteTable([]RouteRule{
+	return PublicRouteTable(nil)
+}
+
+// PublicRouteTable 返回默认路由权限表，并额外把一组路径登记为公开可读。
+//
+// 为什么要这个变体而不是让调用方自己在 DefaultRouteTable 的结果上追加：
+// RouteTable 的 rules 是**私有**的，且追加必须发生在构造期 ——
+// 事后追加会引入「表已建好、中途又加规则」的并发面。
+//
+// 用途：指标端点的路径是**配置项**（`AGENTBOT_METRICS_PATH`），
+// 而权限表此前把 "/metrics" 写死。改配置后路由挂到了新路径，
+// 权限表却还只认老路径 → 新路径落进默认拒绝 → **403**。
+// 症状是「按配置改了路径，指标端点整个不可用」，且手测时若只看
+// 「服务起来了」完全发现不了（见 observability_e2e_test.go 的回归测试）。
+//
+// 教训与「静态目录在 Handler 与 Service 各存一份」同源：
+// 同一件事被两处各存一份，改一处不报错，只是那一处继续按旧值回答。
+func PublicRouteTable(extraPublicPaths []string) *RouteTable {
+	rules := defaultRules()
+	for _, p := range extraPublicPaths {
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
+		// GET 与 HEAD 都登记：抓取端会用 HEAD 做连通性探测，
+		// 只登记 GET 会让探测以 403 的形式失败。
+		rules = append(rules,
+			RouteRule{Method: http.MethodGet, Pattern: p, Public: true},
+			RouteRule{Method: http.MethodHead, Pattern: p, Public: true},
+		)
+	}
+	return NewRouteTable(rules)
+}
+
+// defaultRules 返回内置的权限规则集合。
+//
+// 拆成独立函数是为了让 PublicRouteTable 能在**构造期**追加规则，
+// 而不是在已建好的表上做二次修改（那会引入可变共享状态）。
+func defaultRules() []RouteRule {
+	return []RouteRule{
 		// Agent
 		{Method: http.MethodGet, Pattern: "/api/v1/agents", Action: role.PermAgentRead},
 		{Method: http.MethodPost, Pattern: "/api/v1/agents", Action: role.PermAgentCreate},
@@ -455,7 +493,7 @@ func DefaultRouteTable() *RouteTable {
 		{Pattern: "/api/v1/admin/", Action: role.PermRoleManage},
 		{Method: http.MethodGet, Pattern: "/admin", Public: true},
 		{Method: http.MethodGet, Pattern: "/admin/", Public: true},
-	})
+	}
 }
 
 // Middleware 在 HTTP 层执行权限判定。

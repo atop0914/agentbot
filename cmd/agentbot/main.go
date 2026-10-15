@@ -88,16 +88,24 @@ func run(args []string) int {
 		}
 	}()
 
-	// 指标端点：端口与路径都来自配置。硬编码 :9090 在多实例部署里会撞端口，
-	// 而那种失败发生在启动数秒之后，表现为「服务莫名退出」，最难与配置关联。
+	// 独立的指标监听端口（默认 :9090），端口与路径都来自配置。
+	// 硬编码 :9090 在多实例部署里会撞端口，而那种失败发生在启动数秒之后，
+	// 表现为「服务莫名退出」，最难与配置关联。
+	//
+	// ⚠️ 这里必须挂**应用的真实注册表**，而不是自绘的内容。
+	// 第一版这里是一个 stub：只输出一行 "# AgentBot metrics (stub)" 加
+	// build_info。症状极具误导性 —— 部署文档、Dockerfile 与 compose 都把
+	// 9090 作为抓取目标，于是运维照着文档配置 Prometheus，
+	// **程序不报任何错**，只是仪表盘永远是空的（唯一能看到的指标是版本号）。
+	// 两个 /metrics 端点各答一份，其中一个在撒谎 —— 这正是
+	// 「同一件事被两个组件各存一份」这条教训的又一次复现。
+	//
+	// 现在两处指向**同一个** registry 与同一个 handler：
+	// :8080 上的 /metrics 与 :9090 上的 /metrics 内容完全一致。
 	var metricsServer *http.Server
 	if cfg.Metrics.Enabled {
 		metricsMux := http.NewServeMux()
-		metricsMux.HandleFunc(cfg.Metrics.Path, func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-			fmt.Fprint(w, "# AgentBot metrics (stub)\n")
-			fmt.Fprintf(w, "agentbot_build_info{version=%q,commit=%q} 1\n", v.Version, v.GitCommit)
-		})
+		metricsMux.Handle(cfg.Metrics.Path, application.MetricsH)
 		metricsServer = &http.Server{
 			Addr:              fmt.Sprintf(":%d", cfg.Metrics.Port),
 			Handler:           metricsMux,
