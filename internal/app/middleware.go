@@ -4,9 +4,6 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
-	"time"
-
-	"github.com/google/uuid"
 
 	"github.com/atop0914/agentbot/internal/metrics"
 )
@@ -39,22 +36,6 @@ func recoveryMiddleware(logger *slog.Logger, m *httpMetrics) func(http.Handler) 
 	}
 }
 
-// requestIDMiddleware adds a unique request ID to each request.
-// If the request already has an X-Request-ID header, it reuses it.
-func requestIDMiddleware() func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			reqID := r.Header.Get("X-Request-ID")
-			if reqID == "" {
-				reqID = uuid.New().String()
-			}
-			w.Header().Set("X-Request-ID", reqID)
-			r.Header.Set("X-Request-ID", reqID)
-			next.ServeHTTP(w, r)
-		})
-	}
-}
-
 // corsMiddleware handles CORS headers for development.
 func corsMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
@@ -71,27 +52,6 @@ func corsMiddleware() func(http.Handler) http.Handler {
 			}
 
 			next.ServeHTTP(w, r)
-		})
-	}
-}
-
-// loggingMiddleware logs each request with method, path, status, duration.
-func loggingMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			start := time.Now()
-			sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
-
-			next.ServeHTTP(sw, r)
-
-			logger.Info("request",
-				"method", r.Method,
-				"path", r.URL.Path,
-				"status", sw.status,
-				"duration_ms", time.Since(start).Milliseconds(),
-				"request_id", r.Header.Get("X-Request-ID"),
-				"remote", r.RemoteAddr,
-			)
 		})
 	}
 }
