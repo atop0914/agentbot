@@ -175,7 +175,20 @@ func observabilityEnv(t *testing.T, mainPort, metricsPort int, metricsPath strin
 		"AGENTBOT_METRICS_PORT=" + itoa(metricsPort),
 		"AGENTBOT_METRICS_ENABLED=true",
 		"AGENTBOT_LOG_LEVEL=info",
-		"AGENTBOT_FILE_SYSTEM_ROOT=" + filepath.Join(t.TempDir(), "fs"),
+		// 沙箱根目录的变量名是 AGENTBOT_FILESYSTEM_ROOT（config 里
+		// FileSystem.Root，见 internal/config/loader.go）。
+		//
+		// ⚠️ 这里第一版写成了 AGENTBOT_FILE_SYSTEM_ROOT（多一个下划线）。
+		// 那个键在 loader 里**不存在**，于是这行环境变量被静默忽略，
+		// FileSystem.Root 退回默认值 /var/lib/agentbot/fs；CI runner 与
+		// 开发机都以普通用户跑测试，os.MkdirAll 直接 permission denied，
+		// 进程以「filesystem sandbox root is unavailable」退出，
+		// waitForHealth 等满 20s 后报「服务在 20s 内未就绪」。
+		//
+		// 症状之所以误导：报错指向「服务起不来」，而真正的原因是
+		// 一行拼错的环境变量名 —— 配置类 bug 的典型形态，
+		// 不报「未知配置项」，只让取到默认值的那一处继续按旧值回答。
+		"AGENTBOT_FILESYSTEM_ROOT=" + filepath.Join(t.TempDir(), "fs"),
 		"AGENTBOT_STORAGE_LOCAL_PATH=" + filepath.Join(t.TempDir(), "storage"),
 		"AGENTBOT_ADMIN_CONSOLE_DIR=" + filepath.Join(t.TempDir(), "web"),
 	}
