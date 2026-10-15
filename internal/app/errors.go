@@ -13,4 +13,10 @@ var (
 	errTenantBindingRejected = errors.New("app: tenant binding rejected")
 	// errSSOAccountInvalid 表示 SSO 回调返回的账号结构不可识别。
 	errSSOAccountInvalid = errors.New("app: sso account is invalid")
+	// errMetricsSetupFailed 表示指标注册失败（指标名非法 / 标签集冲突 / 超集重名）。
+	//
+	// 为什么它是**拒绝启动**而不是打条日志继续：注册失败意味着
+	// /metrics 会导出语法非法或语义错乱的文本，抓取端会整轮失败。
+	// 一个「看起来在跑但指标全丢」的进程比一个起不来的进程更难查。
+	errMetricsSetupFailed = errors.New("app: metrics setup failed")
 )

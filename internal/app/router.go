@@ -84,12 +84,20 @@ func NewRouter(a *App) http.Handler {
 	// Admin console (aggregate view + static hosting for the React build)
 	a.AdminH.RegisterRoutes(mux)
 
-	// Apply global middleware chain: Recovery → RequestID → CORS → Logging
+	// Metrics endpoint (Day 3-7). 与 /health 同级，**匿名可达** ——
+	// 抓取端不持有本平台的 JWT，要求认证会让指标形同虚设；
+	// 导出内容只有计数与延迟分布，不含用户数据（见 metrics_wiring.go 的取舍说明）。
+	mux.Handle(a.MetricsPath(), a.MetricsH)
+
+	// Apply global middleware chain. Go 的包装是**由内向外**叠加：
+	// 最后执行的那次赋值在最外层、最先执行。因此实际执行顺序为
+	//   Metrics → Recovery → RequestID → CORS → Logging → Tenant → Auth → Authz → mux
+	// 每一层的顺序都有理由，改动前请读旁边注释（尤其 metrics 必须在最外层）。
 	var handler http.Handler = mux
 	handler = loggingMiddleware(a.Logger)(handler)
 	handler = corsMiddleware()(handler)
 	handler = requestIDMiddleware()(handler)
-	handler = recoveryMiddleware(a.Logger)(handler)
+	handler = recoveryMiddleware(a.Logger, a.httpMetrics)(handler)
 
 	// Permission enforcement sits inside the global chain so that a malformed
 	// request is still recovered/logged, but outside the business handlers so
@@ -134,6 +142,24 @@ func NewRouter(a *App) http.Handler {
 			handler = authzMW.Authorize(handler)
 		}
 	}
+
+	// ⚠️ metricsMiddleware 必须挂在**最外层**（最后一层包装 = 最先执行）。
+	//
+	// 第一版把它紧贴 mux（最内层），理由是「只统计业务耗时」。
+	// 实测这个位置有一个致命缺陷：authz 中间件对未授权请求会**直接写
+	// 401/403 并 return，不调用 next**（fail-closed 短路），
+	// 于是所有被拒绝的请求都到不了内层 —— /metrics 里根本没有这些 series。
+	//
+	// 症状极具误导性：curl 手测返回 403，但 route="/api/v1/agents" 在
+	// 导出文本里**完全不存在**。后果是**错误率恒为 0**：
+	// 一个永远看不见失败的监控，比没有监控更危险 —— 它会让运维确信
+	// 「没有 5xx」。
+	//
+	// 挂最外层后观测到的是「客户端实际经历的总耗时」，这正是排障时
+	// 要回答的问题（业务耗时可以从业务自己的指标里看）。
+	// 任何会短路返回错误而不调用 next 的中间件，它的内层都观测不到它 ——
+	// 这是中间件分层最容易踩的一个坑。
+	handler = metricsMiddleware(a.httpMetrics)(handler)
 
 	return handler
 }

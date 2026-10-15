@@ -425,6 +425,24 @@ func DefaultRouteTable() *RouteTable {
 		{Method: http.MethodHead, Pattern: "/health", Public: true},
 		{Method: http.MethodOptions, Pattern: "/", Public: true},
 
+		// 指标端点（Day 3-7）：与 /health 同级，**必须匿名可达**。
+		//
+		// 这条规则不是可选的「顺手补上」—— 中间件对未登记路径的默认行为是
+		// 403，而 /metrics 是**在 mux 上注册过**的：路由存在、handler 正确、
+		// 直接调 handler 也是 200，但经完整中间件链后变成 403。
+		// 症状极具误导性：Prometheus 静默抓不到指标（403 不算抓取失败告警，
+		// 只表现为仪表盘空），而 curl 手测若绕过中间件就一切正常。
+		//
+		// 抓取端（Prometheus / 容器探针）不持有本平台的 JWT，因此这里的
+		// Public 是**契约的一部分**，不是疏漏。导出内容只含计数、延迟分布
+		// 与模块规模，不含用户数据 —— 若部署要求指标也需鉴权，
+		// 正确做法是网关层把该路径限制为内网可达（见 metrics_wiring.go）。
+		//
+		// HEAD 一并登记：抓取端会用 HEAD 做连通性探测，
+		// 只登记 GET 会让探测以 403 的形式失败。
+		{Method: http.MethodGet, Pattern: "/metrics", Public: true},
+		{Method: http.MethodHead, Pattern: "/metrics", Public: true},
+
 		// 认证相关路由自身不需要权限（登录/注册/刷新/登出）。
 		{Pattern: "/api/v1/auth/", Public: true},
 

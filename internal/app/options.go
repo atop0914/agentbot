@@ -87,6 +87,10 @@ func NewWithConfig(cfg config.Config) (*App, error) {
 		return nil, err
 	}
 
+	// 启动日志写出指标端点的实际路径：配置里 metrics.path 可改，
+	// 若静默使用，排障时会出现「按默认路径抓不到指标」的困惑。
+	logMetricsPath(logger, a.MetricsPath())
+
 	// 所有权移交：从这里起由 App 持有，调用方负责 Close。
 	// 注意**不能**用 defer 关它 —— 那会在 NewWithConfig 返回的瞬间
 	// 把刚交给 App 的句柄关掉，症状是「装配成功但一用就 database is closed」。

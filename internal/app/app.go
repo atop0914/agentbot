@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/atop0914/agentbot/internal/executor"
 	"github.com/atop0914/agentbot/internal/filesystem"
 	"github.com/atop0914/agentbot/internal/memory"
+	"github.com/atop0914/agentbot/internal/metrics"
 	"github.com/atop0914/agentbot/internal/monitor"
 	"github.com/atop0914/agentbot/internal/network"
 	"github.com/atop0914/agentbot/internal/role"
@@ -95,6 +97,18 @@ type App struct {
 	StorageBackend string
 	// DB 与 Storage 指向同一句柄，别名保留给「取底层 *sql.DB」的调用点。
 	DB *storage.DB
+	// 可观测性（Day 3-7）。Metrics 是零依赖的指标注册表，
+	// HTTP 层的打点由装配层完成（见 metrics_wiring.go）。
+	//
+	// 注册表挂在这里的理由与 Config 相同：排障时要能问
+	// 「这个进程到底注册了哪些指标」，而不是去 grep 源码。
+	Metrics *metrics.Registry
+	// MetricsH 是 /metrics 的 handler。为什么也挂出来：
+	// 单测需要在不启动真实监听的情况下直接打这个 handler。
+	MetricsH http.Handler
+	// httpMetrics 是 HTTP 层指标的持有者。不导出：它是装配细节，
+	// 外部只应通过 /metrics 的文本观察，而不是直接摸计数器对象。
+	httpMetrics *httpMetrics
 }
 
 // New creates a new App with all in-memory services wired up.
@@ -118,6 +132,24 @@ func build(cfg config.Config, logger *slog.Logger, db *storage.DB) (*App, error)
 	// 装配层说 postgres」这类最难查的分歧（3-3 那轮踩过：
 	// 配置层与装配层各写一份判定，两边对不上）。
 	dbHandle := sqlDB(db)
+
+	// 指标面（Day 3-7）。在任何业务组件之前建立注册表，理由：
+	// 后面每个模块的装配都可能失败，而「装配失败的原因」本身也是要观测的 ——
+	// 若注册表在末尾才建，早期失败就只剩一行 stderr，没有任何指标可看。
+	//
+	// 命名空间 agentbot_ 是固定的：同一个 Prometheus 抓多个服务时
+	// 无前缀的 http_requests_total 会与其他服务撞名并被静默合并。
+	metricReg := metrics.NewRegistry("agentbot")
+	httpMetrics, err := newHTTPMetrics(metricReg)
+	if err != nil {
+		return nil, errors.Join(errMetricsSetupFailed, err)
+	}
+	// 存储后端的选择在 options.go 里已经做完（这里的 db 就是结论），
+	// 因此这里只是把**结论**翻译成指标，不再做任何判定 ——
+	// 两处各判一次会产出「指标说 postgres、实际用内存」这类分歧。
+	if err := registerStorageMetrics(metricReg, backendOf(db), cfg.Storage.AllowMemoryFallback); err != nil {
+		return nil, errors.Join(errMetricsSetupFailed, err)
+	}
 
 	// User service：配了数据库就用 Postgres 实现，否则内存。
 	// 内存实现**不删除** —— 它是回退路径，且被契约测试持续覆盖。
@@ -435,6 +467,9 @@ func build(cfg config.Config, logger *slog.Logger, db *storage.DB) (*App, error)
 		TenantH:      tenantH,
 		SSOSvc:       ssoSvc,
 		SSOH:         ssoH,
+		Metrics:      metricReg,
+		MetricsH:     metricReg.Handler(logger),
+		httpMetrics:  httpMetrics,
 	}, nil
 }
 
