@@ -1,11 +1,16 @@
 package app_test
 
 import (
+	"bytes"
 	"io"
 	"net/http"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // 本文件是 Day 3-7 第四批：**真实二进制**上的双指标端点一致性验证。
@@ -31,7 +36,10 @@ func TestBinaryBothMetricsEndpointsServeSameRealData(t *testing.T) {
 
 	env := observabilityEnv(t, mainPort, metricsPort, "")
 
-	_, logBuf := startBinary(t, bin, env)
+	// 用自己的同步捕获启动（见 startBinarySynced 的说明）：
+	// startBinary 返回的 bytes.Buffer 由 exec 内部 goroutine 持续写入，
+	// 测试侧同时读它 = data race（-race 下必红，实测踩过）。
+	logBuf := startBinarySynced(t, bin, env, mainPort)
 
 	mainURL := "http://127.0.0.1:" + itoa(mainPort)
 	metricsURL := "http://127.0.0.1:" + itoa(metricsPort)
@@ -97,9 +105,24 @@ func TestBinaryBothMetricsEndpointsServeSameRealData(t *testing.T) {
 		t.Errorf("未授权请求未被计入指标（错误率会恒为 0）: %v", got)
 	}
 
-	// ⑤ 日志里不得出现 per-request 访问日志（INFO 级别下应只有启动/关闭行）
-	if n := strings.Count(logBuf.String(), `"msg":"request"`); n != 0 {
-		t.Errorf("INFO 级别下不应打访问日志，实际 %d 行 —— 真实流量下启动信息会被淹没", n)
+	// ⑤ 日志里不得出现 per-request 访问日志（INFO 级别下应只有启动/关闭行）。
+	//
+	// ⚠️ 必须用**自己持有的同步缓冲**，不能读 exec.Cmd 写的那只 bytes.Buffer：
+	// 子进程的输出由 exec 内部的 goroutine 持续写入，测试侧同时读它是
+	// data race（-race 下必红，实测踩过）。
+	// startBinary 返回的 buffer 只适合在进程**退出后**读。
+	logs := logBuf.String()
+	if n := strings.Count(logs, `"msg":"request"`); n != 0 {
+		t.Errorf("INFO 级别下不应打访问日志，实际 %d 行 —— 真实流量下启动信息会被淹没\n%s", n, logs)
+	}
+	// 反向断言：启动日志**必须**在 —— 否则上面的断言在「子进程根本没起来」
+	// 时也会通过（那正是最容易被放过的假绿）。
+	if !strings.Contains(logs, "http server listening") {
+		t.Errorf("启动日志缺失，说明该断言可能什么都没测到\n%s", logs)
+	}
+	// 顺带验证指标端点路径被写进了启动日志（配置项可改，必须能确认实际值）
+	if !strings.Contains(logs, "metrics endpoint registered") {
+		t.Errorf("启动日志应写出指标端点的实际路径\n%s", logs)
 	}
 }
 
@@ -187,4 +210,68 @@ func probeStatus(t *testing.T, url string) int {
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, resp.Body)
 	return resp.StatusCode
+}
+
+// syncBuffer 是一个并发安全的输出缓冲。
+//
+// 为什么需要它：exec.Cmd 会起一个 goroutine 把子进程的 stdout/stderr
+// 拷进我们给的 io.Writer。若直接给 *bytes.Buffer，测试侧读它时
+// 就与那个 goroutine 形成 data race —— `go test -race` 必然报错。
+// 实测：第一条断言在单跑时是绿的，只有整机 -race 全量跑才复现。
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+// String 在锁内取快照，可安全地与子进程的输出并发调用。
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
+
+// startBinarySynced 启动被测二进制并返回**并发安全**的输出缓冲。
+//
+// 与共享的 startBinary 的区别仅在输出捕获方式；清理与就绪等待保持一致
+// （SIGTERM 优先，超时 SIGKILL），这样行为不会因用了哪个启动器而不同。
+func startBinarySynced(t *testing.T, bin string, env []string, mainPort int) *syncBuffer {
+	t.Helper()
+
+	cmd := exec.Command(bin)
+	cmd.Env = env
+	out := &syncBuffer{}
+	cmd.Stdout = out
+	cmd.Stderr = out
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("启动二进制失败: %v", err)
+	}
+
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		if cmd.Process == nil {
+			return
+		}
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			_ = cmd.Process.Kill()
+		}
+		<-done
+	})
+	go func() {
+		_ = cmd.Wait()
+		close(done)
+	}()
+
+	if !waitForHealth("http://127.0.0.1:"+itoa(mainPort), 20*time.Second) {
+		t.Fatalf("服务在 20s 内未就绪\n--- 进程输出 ---\n%s", out.String())
+	}
+	return out
 }
