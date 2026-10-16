@@ -14,6 +14,10 @@ import (
 // cgroup2Magic 是 cgroup2fs 的 statfs f_type 值（内核源码中的 CGROUP2_SUPER_MAGIC）。
 const cgroup2Magic = 0x63677270
 
+// exitTimeout 是「命令因 wall-clock 超时被中断」的退出码。
+// 沿用 coreutils timeout(1) 的 124，让运维不必额外查文档就能认出来。
+const exitTimeout = 124
+
 // Limited 是一个已施加限制的执行上下文，由 Manager.Prepare 返回。
 type Limited struct {
 	manager *Manager
@@ -334,6 +338,16 @@ func (m *Manager) Run(ctx context.Context, agentID, workDir, script string, time
 		} else {
 			res.ExitCode = -1
 		}
+	} else if res.TimedOut {
+		// ⚠️ 这里修的是一个会**误导调用方**的返回值：
+		// 超时被打断的命令，waitErr 可能是 nil —— `sh -c "cmd & sleep 300"`
+		// 的 sh 在收到 SIGKILL 前已被 cmd.Wait 判定结束（管道由我们关闭），
+		// 或者主命令早就跑完了、只是 sh 还在等后台任务。
+		// 两种情况下 exitCode 都是 0，调用方会把「被中断」读成「成功完成」，
+		// 进而把一个只做了一半的任务标记为已完成 —— 这比报错更糟。
+		//
+		// 用 124 表达「超时」是 coreutils timeout(1) 的约定，运维一眼能认出来。
+		res.ExitCode = exitTimeout
 	}
 
 	// 超时（外部 ctx 或 Wait 自身超限）时 CommandContext 只杀了主进程，
