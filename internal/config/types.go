@@ -105,6 +105,17 @@ func (c RedisConfig) Addr() string {
 	return fmt.Sprintf("%s:%d", c.Host, c.Port)
 }
 
+// Configured 判定是否声明了 Redis。
+//
+// 这是**全项目唯一**的判定入口（与 DatabaseConfig.Configured /
+// SSOConfig.Configured 同一约定）：配置层与装配层各写一份字符串判断，
+// 会产出「校验说配了、装配说没配」这类最难查的分歧。
+// 本轮之前 Redis 没有这个方法 —— 装配层若直接看 Host != ""
+// 就又埋了一份重复判定。
+func (c RedisConfig) Configured() bool {
+	return c.Host != ""
+}
+
 // AuthConfig 是认证与令牌配置。
 type AuthConfig struct {
 	// JWTSecret 是令牌签名密钥，**机密**：无默认值，长度下限 32 字节。
@@ -370,11 +381,14 @@ func (c Config) Validate() error {
 			problems = append(problems, fmt.Sprintf("database.port out of range: %d", c.Database.Port))
 		}
 	}
-	// Redis 目前只是一个**预留的配置面**：没有任何代码路径 import go-redis，
-	// 持久化仍是内存实现。因此 redis.host 为空表示「未配置 Redis」，是合法状态；
-	// 若把非空校验留在这里，用户显式写 redis.host="" 时反而会被拒绝 ——
-	// 那恰好是「我不用 Redis」的正确表达。
-	// 仅当**配了** host 时才校验端口是否可用。
+	// Redis 自本轮起不再是预留配置面：internal/redis 提供了零依赖的
+	// RESP2 客户端，凭据吊销表与限流计数由它承载（多副本共享）。
+	//
+	// 语义约定（与 database 一致）：
+	//   - redis.host 为空 = 「不使用 Redis」，这是合法状态 ——
+	//     单副本部署用内存实现即可。显式留空不能被校验惩罚。
+	//   - 配了 host 才校验端口范围。
+	// 是否真的启用 Redis 由装配层看 Redis.Configured() 决定。
 	if c.Redis.Host != "" {
 		if c.Redis.Port < 1 || c.Redis.Port > 65535 {
 			problems = append(problems, fmt.Sprintf("redis.port out of range: %d", c.Redis.Port))

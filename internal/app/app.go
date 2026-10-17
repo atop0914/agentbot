@@ -24,6 +24,7 @@ import (
 	"github.com/atop0914/agentbot/internal/metrics"
 	"github.com/atop0914/agentbot/internal/monitor"
 	"github.com/atop0914/agentbot/internal/network"
+	"github.com/atop0914/agentbot/internal/redis"
 	"github.com/atop0914/agentbot/internal/role"
 	"github.com/atop0914/agentbot/internal/sso"
 	"github.com/atop0914/agentbot/internal/storage"
@@ -109,6 +110,17 @@ type App struct {
 	// httpMetrics 是 HTTP 层指标的持有者。不导出：它是装配细节，
 	// 外部只应通过 /metrics 的文本观察，而不是直接摸计数器对象。
 	httpMetrics *httpMetrics
+
+	// Redis 是 Redis 客户端；未配置 Redis（或回退到内存）时为 nil。
+	// 挂出来的理由与 Storage 相同：排障时要能问「这个进程到底连了没有」。
+	Redis *redis.Client
+	// RedisBackend 是 Redis 后端标识（memory / redis），用于日志与诊断。
+	RedisBackend string
+	// RateLimiter 是跨副本限流器；回退到内存时为 nil（此时不限流）。
+	//
+	// nil 表示「不限制」而不是「限制为零」：把 nil 当成零额度
+	// 会让一个未配置 Redis 的部署变成全站 429。
+	RateLimiter *redis.RateLimiter
 }
 
 // New creates a new App with all in-memory services wired up.
@@ -123,7 +135,7 @@ type App struct {
 // 之前的版本在 app.New() 里硬编码了 `Secret: "dev-secret-change-in-production"`，
 // 那是一行「开发方便、生产致命」的代码：任何部署只要忘了注入密钥就会
 // 带着一个公开可伪造的密钥跑起来，而且完全不报错。
-func build(cfg config.Config, logger *slog.Logger, db *storage.DB) (*App, error) {
+func build(cfg config.Config, logger *slog.Logger, db *storage.DB, rsel redisSelection) (*App, error) {
 	// 持久化后端在这里落地：db 为 nil 表示内存后端，否则用 Postgres 实现。
 	//
 	// 为什么把 *storage.DB 显式传进来，而不是在 build 里再判断一次配置：
@@ -131,6 +143,8 @@ func build(cfg config.Config, logger *slog.Logger, db *storage.DB) (*App, error)
 	// 并贯彻到底。若 build 自己再读一遍配置，就会产出「选择器说内存、
 	// 装配层说 postgres」这类最难查的分歧（3-3 那轮踩过：
 	// 配置层与装配层各写一份判定，两边对不上）。
+	//
+	// Redis 的选择（rsel）走完全相同的约定，理由也一样。
 	dbHandle := sqlDB(db)
 
 	// 指标面（Day 3-7）。在任何业务组件之前建立注册表，理由：
@@ -171,7 +185,10 @@ func build(cfg config.Config, logger *slog.Logger, db *storage.DB) (*App, error)
 	}
 	jwtMgr := auth.NewJWTManager(jwtCfg)
 	oauthCfgs := make(map[string]*auth.OAuthConfig)
-	authSvc := auth.NewService(jwtMgr, userSvc, oauthCfgs)
+	// 吊销表由装配层注入（见 redis_wiring.go）：多副本部署下必须共享，
+	// 否则一个副本上的登出对另一个副本无效 —— 用户看到 200，
+	// 安全动作却没有生效，且没有任何外部信号。
+	authSvc := auth.NewService(jwtMgr, userSvc, oauthCfgs, rsel.revocations)
 	authHandler := auth.NewHandler(authSvc)
 	authMW := auth.NewMiddleware(authSvc)
 
