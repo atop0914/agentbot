@@ -189,7 +189,14 @@ func build(cfg config.Config, logger *slog.Logger, db *storage.DB, rsel redisSel
 	// 否则一个副本上的登出对另一个副本无效 —— 用户看到 200，
 	// 安全动作却没有生效，且没有任何外部信号。
 	authSvc := auth.NewService(jwtMgr, userSvc, oauthCfgs, rsel.revocations)
+	// 登录暴力破解防护：只有拿到共享限流器时才挂上。
+	// rsel.limiter 为 nil（未配置 Redis / 已回退）时不挂 ——
+	// 宁愿不限流，也不要退回一个「多副本下等于没限」的假限流
+	// （那会让运维以为已经有了防护）。
 	authHandler := auth.NewHandler(authSvc)
+	if rsel.limiter != nil {
+		authHandler.WithLoginGuard(auth.NewLoginGuard(newRedisLoginLimiter(rsel.limiter)), logger)
+	}
 	authMW := auth.NewMiddleware(authSvc)
 
 	// Agent service：与 user/audit 同一口径 —— 配了数据库就用 Postgres 实现，

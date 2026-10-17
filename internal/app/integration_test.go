@@ -388,9 +388,17 @@ func TestAuthLoginInvalidCredentials(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		// The auth handler returns error via appErr, check for non-200
-		t.Logf("login status = %d (expected non-200 for bad creds)", resp.StatusCode)
+	// 断言**精确的**状态码 401，而不是「非 200」。
+	//
+	// 原先只 t.Logf 记录了状态码、从不失败 —— 而 500 也满足「非 200」，
+	// 于是一个真实的错误分类缺陷（user.ValidatePassword 返回裸错误
+	// → errors.FromError 落进 default 分支 → 500）长期绿着。
+	// 实测：修复前这里的输出是 `login status = 500`。
+	//
+	// 教训：断言「不是 X」几乎总是太弱。要断言**就是 Y**。
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("login status = %d, want %d for bad credentials",
+			resp.StatusCode, http.StatusUnauthorized)
 	}
 }
 

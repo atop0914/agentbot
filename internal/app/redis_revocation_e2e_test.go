@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -113,14 +114,26 @@ func (r *replicaEnv) doAuthed(t *testing.T, method, path, token string) int {
 }
 
 // redisCfgForTest 返回一个指向本机 Redis 的开发配置。
+//
+// DB 编号按测试名哈希分配（范围 1..15），**每个测试一个库**。
+// 这不是洁癖：限流键里有 `login:ip:127.0.0.1` 这种与测试无关的
+// 固定维度，而 httptest 的 RemoteAddr 恒为 127.0.0.1 ——
+// 共用一个库时，前一个测试打满的 IP 计数会让后一个测试
+// 一开场就拿到 429（实测踩到：SuccessClearsAccountCounter
+// 的第 1 次请求就返回 429）。
+// 用独立的库把「测试之间不应共享状态」变成结构性保证，
+// 而不是靠每个测试记得自己清理。
 func redisCfgForTest(t *testing.T) config.Config {
 	t.Helper()
 	cfg := config.DevelopmentDefault()
 	cfg.Redis.Host = "127.0.0.1"
 	cfg.Redis.Port = 6379
-	// 用独立的 DB 编号隔离本次测试的键，避免与其他测试/手工验证互相污染。
-	// 采用 DB 9（Redis 默认 16 个库，9 不常被占用）。
-	cfg.Redis.DB = 9
+
+	// 1..15：Redis 默认 16 个库，避开 0（常被手工验证占用）。
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(t.Name()))
+	cfg.Redis.DB = 1 + int(h.Sum32()%15)
+
 	if !redisAvailable(t) {
 		t.Skipf("redis unavailable at %s", redisTestAddr())
 	}
