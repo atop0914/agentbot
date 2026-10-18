@@ -181,6 +181,15 @@ func benchTestDSN() string {
 		"@127.0.0.1:5432/agentbot_test?sslmode=disable"
 }
 
+// benchUniqueEmail 生成一个唯一的 email。
+//
+// Postgres 是**持久**库：用固定 email 做种子会让第二次运行以
+// "email already exists" 失败 —— 而那个失败与「有多快」毫无关系。
+// 唯一化把「基准可重复运行」变成结构性保证，而不是靠手工清理数据库。
+func benchUniqueEmail(prefix string) string {
+	return fmt.Sprintf("bench-%s-%d@example.com", prefix, time.Now().UnixNano())
+}
+
 // benchUser 构造一个可写入的用户。
 func benchUser(email string) *user.User {
 	return &user.User{
@@ -268,7 +277,7 @@ func BenchmarkUserRepository_Create(b *testing.B) {
 		repo := user.NewMemoryRepository()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			u := benchUser(fmt.Sprintf("bench-create-%d-%d@example.com", time.Now().UnixNano(), i))
+			u := benchUser(benchUniqueEmail(fmt.Sprintf("create-%d", i)))
 			if err := repo.Create(u); err != nil {
 				b.Fatalf("create: %v", err)
 			}
@@ -278,7 +287,7 @@ func BenchmarkUserRepository_Create(b *testing.B) {
 		repo := user.NewPostgresRepository(benchPostgresDB(b).SQL())
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			u := benchUser(fmt.Sprintf("bench-create-%d-%d@example.com", time.Now().UnixNano(), i))
+			u := benchUser(benchUniqueEmail(fmt.Sprintf("create-%d", i)))
 			if err := repo.Create(u); err != nil {
 				b.Fatalf("create: %v", err)
 			}
@@ -292,10 +301,12 @@ func BenchmarkUserRepository_Create(b *testing.B) {
 // 因此它是「登录接口有多快」的主要决定因素之一。
 // 密码哈希校验（bcrypt）是**刻意**慢的，不在这里测 —— 它不该被优化掉。
 func BenchmarkUserRepository_GetByEmail(b *testing.B) {
-	email := fmt.Sprintf("bench-getbyemail-%d@example.com", time.Now().UnixNano())
-
 	b.Run("memory", func(b *testing.B) {
 		repo := user.NewMemoryRepository()
+		// 每个子基准用唯一的 email：Postgres 是**持久**库，
+		// 用固定 email 会让第二次运行以 "email already exists" 失败，
+		// 而那与「读取有多快」毫无关系。
+		email := benchUniqueEmail("getbyemail-mem")
 		if err := repo.Create(benchUser(email)); err != nil {
 			b.Fatalf("seed: %v", err)
 		}
@@ -308,6 +319,7 @@ func BenchmarkUserRepository_GetByEmail(b *testing.B) {
 	})
 	b.Run("postgres", func(b *testing.B) {
 		repo := user.NewPostgresRepository(benchPostgresDB(b).SQL())
+		email := benchUniqueEmail("getbyemail-pg")
 		if err := repo.Create(benchUser(email)); err != nil {
 			b.Fatalf("seed: %v", err)
 		}
