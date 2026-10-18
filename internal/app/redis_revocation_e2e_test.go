@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -498,8 +499,18 @@ func TestRedis_StartupLogsBackend(t *testing.T) {
 	if sel.backend != redisBackendRedis {
 		t.Fatalf("backend = %q, want redis", sel.backend)
 	}
-	// 日志位置字段必须不含密码。
-	if got := redisHostForLog(cfg); got != "127.0.0.1:6379/9" {
-		t.Fatalf("redisHostForLog = %q", got)
+	// 日志位置字段必须与**配置的**地址一致，且不含密码。
+	//
+	// ⚠️ 这里断言 cfg 推导出的地址，不写死字面量：DB 号是按测试名
+	// 哈希分配的（见 redisCfgForTest），写死 "/9" 只是在赌哈希结果 ——
+	// 新增一个测试文件就能让哈希碰撞改变 DB 号，于是这条断言
+	// 以「日志格式错了」的假象失败，而日志其实完全正确。
+	want := fmt.Sprintf("%s:%d/%d", cfg.Redis.Host, cfg.Redis.Port, cfg.Redis.DB)
+	if got := redisHostForLog(cfg); got != want {
+		t.Fatalf("redisHostForLog = %q, want %q", got, want)
+	}
+	// 反向断言：日志字段绝不能含密码。
+	if strings.Contains(redisHostForLog(cfg), cfg.Redis.Password) && cfg.Redis.Password != "" {
+		t.Fatal("redisHostForLog leaked the password")
 	}
 }
