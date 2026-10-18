@@ -21,6 +21,28 @@ import (
 // 早就存在但全仓无调用方，控制台因此一直报「产物尚未构建」）。
 //
 // 断言落在**真实 HTTP 状态码**上：429 + Retry-After。
+//
+// ⚠️ 为了让这些测试跑得快，阈值被压到 3（见 rateLimitedReplica）。
+// 每次失败登录都会真实执行一次 bcrypt 校验（**刻意**慢，约 50-100ms），
+// 用默认阈值 10 会让每个测试打十几次密码校验 —— 单包总计多出
+// 数十秒，而 `internal/app` 的 e2e 套件本来就已接近 go test
+// 的 600s 默认超时。用配置把阈值调小，既保留了真实链路，
+// 又不为「跑满默认阈值」付 CPU 代价。
+// 阈值本身可配是**真实需求**（共享出口 IP 的办公场景需要放宽），
+// 不是为了测试才加的开关。
+
+// testLoginLimit 是端到端测试使用的阈值。
+const testLoginLimit = 3
+
+// rateLimitedReplica 起一个「阈值被调小」的 Redis 后端副本。
+func rateLimitedReplica(t *testing.T) *replicaEnv {
+	t.Helper()
+	cfg := redisCfgForTest(t)
+	cfg.Auth.LoginRateLimit = testLoginLimit
+	// 窗口保持默认长度：测试只关心「超限后是否拒绝」，
+	// 不需要短窗口来模拟过期（那会引入时间竞态）。
+	return newRedisReplica(t, cfg)
+}
 
 // loginAttempt 发一次登录请求，返回状态码与 Retry-After 头。
 func loginAttempt(t *testing.T, baseURL, email, password string) (int, string) {
@@ -41,18 +63,17 @@ func loginAttempt(t *testing.T, baseURL, email, password string) (int, string) {
 // 同时断言 **Retry-After 头存在且为正**：只回 429 不带该头，
 // 客户端无法知道该等多久，只能盲目重试 —— 那是把限流转成重试风暴。
 func TestLoginRateLimit_Returns429AfterRepeatedFailures(t *testing.T) {
-	cfg := redisCfgForTest(t)
-	rep := newRedisReplica(t, cfg)
+	rep := rateLimitedReplica(t)
 	rep.register(t)
 
 	// 用一个**存在但密码错**的账号，让失败计数真实累加。
 	email := rep.email
 	wrongPassword := "WrongPass!999"
 
-	// 阈值是 10（auth.loginRateLimit）。打到第 11 次应看到 429。
+	// 阈值是 testLoginLimit（3）。打到第 4 次应看到 429。
 	var got429At int
 	var retryAfter string
-	for i := 1; i <= 15; i++ {
+	for i := 1; i <= testLoginLimit+3; i++ {
 		code, ra := loginAttempt(t, rep.ts.URL, email, wrongPassword)
 		if code == http.StatusTooManyRequests {
 			got429At = i
@@ -65,8 +86,15 @@ func TestLoginRateLimit_Returns429AfterRepeatedFailures(t *testing.T) {
 		}
 	}
 	if got429At == 0 {
-		t.Fatal("15 failed logins did not trigger a 429 — the guard is not " +
-			"wired into the login handler (handler.WithLoginGuard may not be called)")
+		t.Fatalf("%d failed logins did not trigger a 429 — the guard is not "+
+			"wired into the login handler (handler.WithLoginGuard may not be called)",
+			testLoginLimit+3)
+	}
+	// 必须在**恰好**第 limit+1 次被拦：若更早就说明计数逻辑把
+	// 「允许的次数」算错了（例如 Check 也自增）。
+	if got429At != testLoginLimit+1 {
+		t.Fatalf("first 429 at attempt %d, want %d — the threshold off-by-one is wrong",
+			got429At, testLoginLimit+1)
 	}
 	if retryAfter == "" {
 		t.Fatal("429 must carry a Retry-After header; without it clients " +
@@ -86,6 +114,7 @@ func TestLoginRateLimit_Returns429AfterRepeatedFailures(t *testing.T) {
 // 攻击者只要轮询副本就能绕过。
 func TestLoginRateLimit_SharedAcrossReplicas(t *testing.T) {
 	cfg := redisCfgForTest(t)
+	cfg.Auth.LoginRateLimit = testLoginLimit
 	repA := newRedisReplica(t, cfg)
 	repB := newRedisReplica(t, cfg)
 	repA.register(t)
@@ -95,7 +124,7 @@ func TestLoginRateLimit_SharedAcrossReplicas(t *testing.T) {
 
 	// 在 A 上打满失败次数。
 	saw429OnA := false
-	for i := 0; i < 15; i++ {
+	for i := 0; i <= testLoginLimit+2; i++ {
 		code, _ := loginAttempt(t, repA.ts.URL, email, wrong)
 		if code == http.StatusTooManyRequests {
 			saw429OnA = true
@@ -107,9 +136,6 @@ func TestLoginRateLimit_SharedAcrossReplicas(t *testing.T) {
 	}
 
 	// B 副本必须**立刻**也拒绝 —— 即使 B 自己一次失败都没见过。
-	// 注意：这里要从另一个来源 IP 发起，否则按 IP 计数也可能命中；
-	// 但 httptest 的 RemoteAddr 都是 127.0.0.1，因此这里验证的
-	// 主要是**账号维度**的共享，这已经足够证明限流状态跨副本。
 	code, ra := loginAttempt(t, repB.ts.URL, email, wrong)
 	if code != http.StatusTooManyRequests {
 		t.Fatalf("replica B returned %d for an account already throttled on "+
@@ -126,13 +152,12 @@ func TestLoginRateLimit_SharedAcrossReplicas(t *testing.T) {
 // 反向断言（不误伤）：一个输错几次后终于想起密码的用户，
 // 不该在下次登录时仍被之前的失败次数拖累。
 func TestLoginRateLimit_SuccessClearsAccountCounter(t *testing.T) {
-	cfg := redisCfgForTest(t)
-	rep := newRedisReplica(t, cfg)
+	rep := rateLimitedReplica(t)
 	rep.register(t)
 	email := rep.email
 
-	// 输错 3 次（低于阈值 10）。
-	for i := 0; i < 3; i++ {
+	// 输错 2 次（低于阈值 3）。
+	for i := 0; i < testLoginLimit-1; i++ {
 		if code, _ := loginAttempt(t, rep.ts.URL, email, "WrongPass!999"); code != http.StatusUnauthorized {
 			t.Fatalf("attempt %d: got %d, want 401", i+1, code)
 		}
@@ -144,29 +169,28 @@ func TestLoginRateLimit_SuccessClearsAccountCounter(t *testing.T) {
 		t.Fatalf("correct login returned %d, want 200", code)
 	}
 
-	// 计数应已清零：再输错不该立刻接近阈值。
-	// 断言方式是「再输错 6 次仍不该 429」——若清零没生效，
-	// 3 + 6 = 9 仍低于 10，因此这里额外验证一个更强的事实：
-	// 清零后单次失败会让计数从 1 开始。用 Peek 直接读计数更精确。
-	limiter := rep.app.RateLimiter
-	if limiter == nil {
-		t.Fatal("RateLimiter must be wired for a redis-backed app")
-	}
-	// 先失败一次，让计数确定存在。
-	if code, _ := loginAttempt(t, rep.ts.URL, email, "WrongPass!999"); code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", code)
-	}
-	// 通过适配器读回计数（与 handler 用同一存储）。
-	adapter := newRedisLoginLimiter(limiter)
-	count, err := adapter.Increment("login:email:"+email, time.Minute)
+	// 清零后，**账号维度**可以再次用满整个额度。
+	//
+	// ⚠️ 只断言账号维度：成功登录**刻意只清账号计数、不清 IP 计数**
+	// （见 LoginGuard.ClearFailures 的注释 —— 一个用户登录成功
+	// 不能证明同一 IP 上没有别人在撞库）。而 httptest 的
+	// RemoteAddr 恒为 127.0.0.1，所以 IP 维度仍累积着之前的失败，
+	// 迟早会触发按 IP 的阈值。
+	//
+	// 首版这里断言「再失败 limit 次都不会 429」，跑出来是红的 ——
+	// 错的是测试的预期（它假定了一次完整的重置），
+	// 而不是实现（实现按设计只清账号维度）。
+	// 改为直接读账号维度的计数，避开 IP 维度的干扰。
+	limiter := newRedisLoginLimiter(rep.app.RateLimiter)
+	count, err := limiter.Increment("login:email:"+email, time.Minute)
 	if err != nil {
 		t.Fatalf("increment failed: %v", err)
 	}
-	// 清零后应经历 1（刚才那次失败）+ 1（本次探测）= 2，
-	// 而不是 3（清零前的失败数）+ 2 = 5。
-	if count > 3 {
-		t.Fatalf("counter = %d after a successful login cleared it; "+
-			"expected a small number — the success did not clear prior failures", count)
+	// 清零生效时，这次探测应是第 1 次（值 1）；
+	// 若没清零，之前 limit-1 次失败会让它变成 limit。
+	if count != 1 {
+		t.Fatalf("account counter = %d after a successful login, want 1 — "+
+			"the success did not clear prior account failures", count)
 	}
 }
 
@@ -178,6 +202,8 @@ func TestLoginRateLimit_NotWiredWithoutRedis(t *testing.T) {
 	cfg := config.DevelopmentDefault()
 	cfg.Redis.Host = ""
 	cfg.Redis.Password = ""
+	// 阈值调小不改变结论，但让「打满」这一步更快。
+	cfg.Auth.LoginRateLimit = 2
 
 	rep := newRedisReplica(t, cfg)
 	rep.register(t)
@@ -186,8 +212,8 @@ func TestLoginRateLimit_NotWiredWithoutRedis(t *testing.T) {
 		t.Fatal("RateLimiter must be nil without redis")
 	}
 
-	// 打满 15 次失败也不该出现 429（因为没限流）。
-	for i := 0; i < 15; i++ {
+	// 超过任何合理阈值也不该出现 429（因为没限流）。
+	for i := 0; i < 6; i++ {
 		code, _ := loginAttempt(t, rep.ts.URL, rep.email, "WrongPass!999")
 		if code == http.StatusTooManyRequests {
 			t.Fatalf("attempt %d returned 429 without redis; the guard must "+
@@ -200,18 +226,16 @@ func TestLoginRateLimit_NotWiredWithoutRedis(t *testing.T) {
 //
 // 这是对上面端到端断言的**补充**：它把「guard 是否挂上」
 // 变成一个显式检查，失败信息直指原因（WithLoginGuard 没被调用），
-// 而不是让排查者从「15 次登录都没 429」反推。
+// 而不是让排查者从「多次登录都没 429」反推。
 func TestLoginRateLimit_GuardIsActuallyAttached(t *testing.T) {
 	cfg := redisCfgForTest(t)
 	rep := newRedisReplica(t, cfg)
 
-	// 断言 App 持有的 limiter 与 auth handler 上的 guard 来自同一份装配。
 	if rep.app.RateLimiter == nil {
 		t.Fatal("app.RateLimiter must be non-nil for a redis-backed app")
 	}
-	// 通过 auth 包暴露的构造断言接口形态一致（编译期保证 + 运行时非 nil）。
-	g := auth.NewLoginGuard(newRedisLoginLimiter(rep.app.RateLimiter))
-	if g == nil {
+	// 构造必须成功（编译期保证接口形态一致 + 运行时非 nil）。
+	if g := auth.NewLoginGuard(newRedisLoginLimiter(rep.app.RateLimiter)); g == nil {
 		t.Fatal("guard construction must succeed")
 	}
 }
@@ -220,12 +244,11 @@ func TestLoginRateLimit_GuardIsActuallyAttached(t *testing.T) {
 //
 // 与仓库其它错误响应形状一致：客户端不该为一个 429 写特例解析。
 func TestLoginRateLimit_BodyIsDecodable(t *testing.T) {
-	cfg := redisCfgForTest(t)
-	rep := newRedisReplica(t, cfg)
+	rep := rateLimitedReplica(t)
 	rep.register(t)
 
 	var lastBody string
-	for i := 0; i < 15; i++ {
+	for i := 0; i <= testLoginLimit+2; i++ {
 		body := fmt.Sprintf(`{"email":%q,"password":"WrongPass!999"}`, rep.email)
 		resp, err := http.Post(rep.ts.URL+"/api/v1/auth/login", "application/json",
 			bytes.NewBufferString(body))
@@ -240,7 +263,7 @@ func TestLoginRateLimit_BodyIsDecodable(t *testing.T) {
 		}
 	}
 	if lastBody == "" {
-		t.Skip("account was not throttled within 15 attempts; nothing to decode")
+		t.Fatal("account was not throttled; nothing to decode")
 	}
 	var decoded map[string]any
 	if err := json.Unmarshal([]byte(lastBody), &decoded); err != nil {
@@ -249,4 +272,28 @@ func TestLoginRateLimit_BodyIsDecodable(t *testing.T) {
 	if _, ok := decoded["error"]; !ok {
 		t.Fatalf("429 body must carry an 'error' field like other API errors: %s", lastBody)
 	}
+}
+
+// TestLoginRateLimit_ConfigIsHonored 验证配置阈值真的生效。
+//
+// 断言「阈值小时第 N+1 次被拦」比断言「阈值大时更晚被拦」强：
+// 前者能证明配置被读取，后者可能与默认值巧合一致。
+func TestLoginRateLimit_ConfigIsHonored(t *testing.T) {
+	cfg := redisCfgForTest(t)
+	cfg.Auth.LoginRateLimit = 2 // 覆盖默认的 10
+	rep := newRedisReplica(t, cfg)
+	rep.register(t)
+
+	// 2 次失败允许，第 3 次必须被拦。
+	for i := 1; i <= 2; i++ {
+		if code, _ := loginAttempt(t, rep.ts.URL, rep.email, "WrongPass!999"); code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: got %d, want 401", i, code)
+		}
+	}
+	code, _ := loginAttempt(t, rep.ts.URL, rep.email, "WrongPass!999")
+	if code != http.StatusTooManyRequests {
+		t.Fatalf("attempt 3 returned %d, want 429 — cfg.Auth.LoginRateLimit=2 "+
+			"was not honored (is the config wired into NewLoginGuard?)", code)
+	}
+	_ = time.Second
 }

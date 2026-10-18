@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/atop0914/agentbot/internal/auth"
 	"github.com/atop0914/agentbot/internal/config"
+	"github.com/atop0914/agentbot/internal/redis"
 )
 
 // 本文件是 3-9 的**决定性验收**：跨副本的凭据吊销。
@@ -115,14 +117,18 @@ func (r *replicaEnv) doAuthed(t *testing.T, method, path, token string) int {
 
 // redisCfgForTest 返回一个指向本机 Redis 的开发配置。
 //
-// DB 编号按测试名哈希分配（范围 1..15），**每个测试一个库**。
-// 这不是洁癖：限流键里有 `login:ip:127.0.0.1` 这种与测试无关的
-// 固定维度，而 httptest 的 RemoteAddr 恒为 127.0.0.1 ——
-// 共用一个库时，前一个测试打满的 IP 计数会让后一个测试
-// 一开场就拿到 429（实测踩到：SuccessClearsAccountCounter
-// 的第 1 次请求就返回 429）。
-// 用独立的库把「测试之间不应共享状态」变成结构性保证，
-// 而不是靠每个测试记得自己清理。
+// DB 编号按测试名哈希分配（范围 1..15），并且**在返回前清空该库**。
+//
+// 为什么必须清空，而不是「靠哈希避免碰撞」：
+// 哈希只能分散测试，不能保证互斥 —— 实测就有三个测试
+// （Body/NotWired/Config）同时落到 DB 6，于是前一个测试
+// 打满的计数让后一个测试**第一次请求就 429**。
+// 把「测试从干净状态开始」做成 setup 的一部分，
+// 比寄希望于哈希分散可靠得多。
+//
+// 为什么需要独立的库而不是同一个库 + 唯一键前缀：
+// 限流键含 `login:ip:127.0.0.1` 这个与测试无关的固定维度，
+// 而 httptest 的 RemoteAddr 恒为 127.0.0.1 —— 同库时它必然冲突。
 func redisCfgForTest(t *testing.T) config.Config {
 	t.Helper()
 	cfg := config.DevelopmentDefault()
@@ -137,7 +143,41 @@ func redisCfgForTest(t *testing.T) config.Config {
 	if !redisAvailable(t) {
 		t.Skipf("redis unavailable at %s", redisTestAddr())
 	}
+
+	// 清空该库，保证测试从已知状态开始。
+	flushRedisDB(t, cfg)
 	return cfg
+}
+
+// flushRedisDB 清空指定逻辑库。
+//
+// 用一个独立的短连接：调用方（NewWithConfig）会另建自己的连接，
+// 复用同一个客户端会在装配前就持有连接池，反而让所有权变复杂。
+func flushRedisDB(t *testing.T, cfg config.Config) {
+	t.Helper()
+	c, err := redis.New(redis.Config{
+		Addr:        cfg.Redis.Addr(),
+		DB:          cfg.Redis.DB,
+		DialTimeout: time.Second,
+		ReadTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("redis connect for flush (db %d): %v", cfg.Redis.DB, err)
+	}
+	defer func() { _ = c.Close() }()
+	if _, err := c.Do("FLUSHDB"); err != nil {
+		t.Fatalf("flushdb (db %d): %v", cfg.Redis.DB, err)
+	}
+	// 再读一次确认真的空了 —— FLUSHDB 若悄悄失败，
+	// 测试会以「429 at attempt 1」这种极具误导性的方式失败。
+	n, err := c.Do("DBSIZE")
+	if err != nil {
+		t.Fatalf("dbsize after flush: %v", err)
+	}
+	if size, ok := n.(int64); !ok || size != 0 {
+		t.Fatalf("db %d not empty after FLUSHDB (dbsize=%v) — leftover state "+
+			"will make this test fail misleadingly", cfg.Redis.DB, n)
+	}
 }
 
 // TestRedisRevocation_LogoutOnReplicaAIsEnforcedOnReplicaB 是本轮的核心验收。
@@ -326,6 +366,21 @@ func TestRedisRevocation_NewLoginAfterLogoutStillWorks(t *testing.T) {
 	}
 
 	// 重新登录拿新 token。
+	//
+	// ⚠️ **必须等到下一个整秒再登录**，否则两条断言都会失去意义。
+	// JWT 的 iat/exp 是秒级精度，且 payload 里没有 jti（见
+	// internal/auth/jwt.go 的 GenerateTokenPair），所以同一秒内两次登录
+	// 产出的是**字节完全相同**的 token —— 指纹相同，于是这个「新」token
+	// 命中的正是旧 token 的吊销记录，请求被 401 拒掉。
+	//
+	// 实测（本次会话）：同秒两次 GenerateTokenPair 的 access token
+	// 逐字节相等，Fingerprint 都是 919179f391de00cd。
+	//
+	// 这不是实现的 bug：按「凭据指纹」吊销是正确语义，而两个字节相同的
+	// token 本来就是同一个凭据。是**测试的前提不成立** ——
+	// 它假设「重新登录必然得到新凭据」，而同秒内这个假设为假。
+	waitForNextSecond(t)
+
 	body := fmt.Sprintf(`{"email":%q,"password":"Str0ngPass!123"}`, email)
 	loginResp, err := http.Post(repA.ts.URL+"/api/v1/auth/login", "application/json",
 		bytes.NewBufferString(body))
@@ -346,15 +401,83 @@ func TestRedisRevocation_NewLoginAfterLogoutStillWorks(t *testing.T) {
 	if out.AccessToken == "" {
 		t.Fatal("re-login returned no access_token")
 	}
+	// 前提断言：等过一个整秒之后，这个 token 必须真的是**另一个凭据**。
+	// 若它仍与旧 token 逐字节相同，说明等待没生效 ——
+	// 那种情况下下面的 200 断言会以「吊销按用户生效」这种完全错误的
+	// 结论失败（首版就是这么误导的），所以这里先把前提钉住。
 	if out.AccessToken == oldToken {
-		t.Fatal("re-login returned the same token; the test cannot distinguish " +
+		t.Fatal("re-login returned a byte-identical token even after waiting " +
+			"for the next second — the credential-identity premise does not " +
+			"hold, so the assertions below cannot distinguish " +
 			"revocation-by-credential from revocation-by-user")
 	}
 
 	// 新 token 必须可用（不是按用户吊销）。
+	//
+	// 上面已经钉住「这是一个不同的凭据」这个前提，所以这里的 200
+	// 确实能区分「按凭据吊销」与「按用户吊销」。
 	if code := repA.doAuthed(t, http.MethodGet, probePath, out.AccessToken); code != http.StatusOK {
 		t.Fatalf("a freshly issued token must work after logout, got %d — "+
 			"revocation must key on the credential, not the user", code)
+	}
+}
+
+// waitForNextSecond 阻塞到下一个整秒（秒值改变）为止，最坏约 1s。
+//
+// 存在的理由见 TestRedisRevocation_NewLoginAfterLogoutStillWorks：
+// 该测试需要「两次登录落在不同的秒」才能拿到不同指纹的凭据。
+// 用固定 sleep 也行，但这个写法在毫秒层面是精确的，且不浪费整秒。
+func waitForNextSecond(t *testing.T) {
+	t.Helper()
+	start := time.Now().Unix()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Unix() == start {
+		if time.Now().After(deadline) {
+			t.Fatal("wall clock did not advance past the current second in 3s")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// TestRedisRevocation_RevocationIsPerCredentialNotPerUser 是上一条的
+// 服务层补充断言，避开「同秒 token 相同」这个测试噪音。
+//
+// 直接构造两个不同指纹，验证吊销其一不影响其二。
+func TestRedisRevocation_RevocationIsPerCredentialNotPerUser(t *testing.T) {
+	cfg := redisCfgForTest(t)
+
+	// 从装配路径取到吊销表（走真实 redis_wiring 决策表，不是手工构造）。
+	sel, err := selectRedis(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("selectRedis: %v", err)
+	}
+	if sel.client != nil {
+		defer func() { _ = sel.client.Close() }()
+	}
+
+	const userID = "user-same"
+	oldFP := auth.Fingerprint("old-token-" + t.Name())
+	newFP := auth.Fingerprint("new-token-" + t.Name())
+
+	if err := sel.revocations.Revoke(userID, oldFP, time.Hour); err != nil {
+		t.Fatalf("revoke failed: %v", err)
+	}
+	// 旧凭据：已吊销。
+	revoked, err := sel.revocations.IsRevoked(userID, oldFP)
+	if err != nil {
+		t.Fatalf("isrevoked failed: %v", err)
+	}
+	if !revoked {
+		t.Fatal("the revoked credential must read as revoked")
+	}
+	// 同一用户的新凭据：必须**不受影响**。
+	revoked, err = sel.revocations.IsRevoked(userID, newFP)
+	if err != nil {
+		t.Fatalf("isrevoked failed: %v", err)
+	}
+	if revoked {
+		t.Fatal("revoking one credential revoked another credential of the " +
+			"same user — revocation must key on the credential, not the user")
 	}
 }
 
