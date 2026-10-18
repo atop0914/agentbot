@@ -43,6 +43,32 @@
 }
 ```
 
+**失败响应**（凭据错误）：
+
+```json
+{"error": "invalid password: invalid email or password"}
+```
+状态码 **401**。注意「账号不存在」与「密码错误」返回同一个错误与文案 ——
+这是有意的：若两者可区分，登录接口就变成了账号枚举工具。
+
+**限流**（同一账号或来源 IP 在 15 分钟内失败 10 次后）：
+
+```
+HTTP/1.1 429 Too Many Requests
+Retry-After: 900
+```
+```json
+{"error": "too many login attempts, please try again later"}
+```
+
+- 需配置 Redis（跨副本共享计数）。未配 Redis 时不限流 ——
+  宁可明确地不限流，也不要一个「多副本下等于没限」的假限流。
+- 限流器自身故障时**放行**（fail-open）并记 Warn 日志：
+  限流失效只是「速度变慢」，让它 fail-closed 会让一次 Redis 故障
+  变成全站无法登录。
+- 成功登录会清零**该账号**的失败计数（不清来源 IP 维度）。
+- 细节与理由见 `docs/redis.md`。
+
 ---
 
 ## Agent

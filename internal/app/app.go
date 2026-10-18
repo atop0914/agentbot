@@ -195,7 +195,14 @@ func build(cfg config.Config, logger *slog.Logger, db *storage.DB, rsel redisSel
 	// （那会让运维以为已经有了防护）。
 	authHandler := auth.NewHandler(authSvc)
 	if rsel.limiter != nil {
-		authHandler.WithLoginGuard(auth.NewLoginGuard(newRedisLoginLimiter(rsel.limiter)), logger)
+		// 阈值/窗口来自配置（0 表示用 auth 包的内置默认值）。
+		// 可配置的理由：共享出口 IP 的办公场景更容易撞到按 IP
+		// 计数的阈值，运维需要能调；写死就只能改代码。
+		guard := auth.NewLoginGuard(newRedisLoginLimiter(rsel.limiter))
+		if cfg.Auth.LoginRateLimit > 0 || cfg.Auth.LoginRateWindow > 0 {
+			guard = guard.WithLimit(cfg.Auth.LoginRateLimit, cfg.Auth.LoginRateWindow)
+		}
+		authHandler.WithLoginGuard(guard, logger)
 	}
 	authMW := auth.NewMiddleware(authSvc)
 

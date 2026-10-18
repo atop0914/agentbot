@@ -9,9 +9,10 @@
 ## 技术栈
 
 - Go 1.25+ (net/http 标准库)
-- PostgreSQL + Redis（规划中，当前为内存实现）
+- PostgreSQL（持久化，已落地 audit / user / agent 三个仓库）+ Redis（跨副本吊销与限流）
 - JWT 认证 + bcrypt 密码哈希
-- 零第三方 Web 框架与日志库：依赖只有 JWT、uuid、websocket、go-redis、x/crypto
+- 零第三方 Web 框架与日志库：依赖只有 JWT、uuid、websocket、pgx、x/crypto
+  （Redis 客户端为自实现的 RESP2，见 `internal/redis`）
 
 ## 发布
 
@@ -86,8 +87,9 @@ agentbot/
 ### 规划中
 
 - [ ] PostgreSQL 持久化（已落地 audit / user / agent 三个仓库，其余待迁）
-- [ ] Redis 缓存与分布式锁（配置面已存在，尚未落地真用途）
-- [ ] Agent 运行时（容器隔离，依赖 Docker）
+- [x] Redis 落地真用途：跨副本凭据吊销 + 登录暴力破解防护（见 `docs/redis.md`）
+- [ ] 限流覆盖更多敏感端点（注册 / 密码重置 / OAuth 回调）
+- [ ] Agent 运行时（容器隔离，依赖 Docker；本机无 Docker，已由进程级沙箱替代）
 
 ## 构建
 
@@ -218,6 +220,28 @@ GET /health         健康检查
   4xx 在 `warn`，5xx 在 `error` —— 默认级别下日志里只有启动信息与真正的错误。
 - **追踪**：`X-Request-ID` 会回传响应头（尊重上游传入的值），并写进 context，
   业务代码用 `app.RequestIDFromContext(ctx)` 取到同一个值打日志。
+
+## Redis
+
+Redis 承担两个用途，都是**跨副本的安全状态**（见 `docs/redis.md`）：
+
+1. **凭据吊销**：登出后同一 token 在所有副本立即失效。
+   进程内实现下，副本 A 的登出对副本 B 无效 —— 用户看到 200，
+   安全动作却没有生效。
+2. **登录暴力破解防护**：失败次数按账号 + 来源 IP 双维度在共享存储计数，
+   超限返回 `429` + `Retry-After`。
+
+```bash
+# 本机（无 Docker，apt 非容器安装）
+apt-get update -qq && apt-get install -y --no-install-recommends redis-server
+redis-server --daemonize yes --port 6379 --save '' --appendonly no
+export AGENTBOT_REDIS_HOST=127.0.0.1 AGENTBOT_REDIS_PORT=6379
+```
+
+未配置 Redis 时吊销用进程内实现、**不启用限流**：
+宁可明确地不限流，也不要一个「多副本下等于没限」的假限流。
+配了 Redis 但不可达时**默认拒绝启动**（可用
+`AGENTBOT_STORAGE_ALLOW_MEMORY_FALLBACK=true` 显式降级，届时日志会给 WARN）。
 
 ## 开发约定
 

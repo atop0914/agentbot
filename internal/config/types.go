@@ -123,6 +123,16 @@ type AuthConfig struct {
 	AccessExpiry  time.Duration `json:"access_expiry"`
 	RefreshExpiry time.Duration `json:"refresh_expiry"`
 	Issuer        string        `json:"issuer"`
+
+	// LoginRateLimit 是登录失败次数的上限（0 表示用内置默认 10）。
+	//
+	// 为什么做成配置项而不是常量：窗口长度与阈值因部署而异 ——
+	// 面向公网的部署想要更严，内网办公场景可能想要更宽松
+	// （共享出口 IP 的人群更容易撞到按 IP 计数的阈值）。
+	// 把它写死在代码里，运维唯一的调节手段就是改代码。
+	LoginRateLimit int `json:"login_rate_limit"`
+	// LoginRateWindow 是登录失败计数的窗口（0 表示用内置默认 15 分钟）。
+	LoginRateWindow time.Duration `json:"login_rate_window"`
 }
 
 // SSOConfig 是企业 OIDC 接入配置。
