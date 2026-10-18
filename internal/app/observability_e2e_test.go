@@ -171,6 +171,16 @@ func observabilityEnv(t *testing.T, mainPort, metricsPort int, metricsPath strin
 		"AGENTBOT_AUTH_JWT_SECRET=agentbot-e2e-observability-secret-0000000000",
 		"AGENTBOT_DATABASE_HOST=",
 		"AGENTBOT_DATABASE_PASSWORD=",
+		// Redis 与 database 同理：Load 从 Default() 起底，而 Default()
+		// 在 Redis.Host 上留了 localhost:6379。不显式清空的话，被测进程
+		// 会被装配层判定为「配了 Redis」→ 探测 localhost:6379 → 连不上
+		// → fail-closed 拒绝启动，测试于是卡在 waitForHealth 的 20s 超时，
+		// 报「服务在 20s 内未就绪」—— 又是「报错指向起不来、真因是
+		// 一行该写没写的环境变量」。
+		//
+		// 空串是**有效覆盖**：setter.str 走 LookupEnv，空值会把字段置为空，
+		// 这正是 RedisConfig.Configured() 判定的「不使用 Redis」。
+		"AGENTBOT_REDIS_HOST=",
 		"AGENTBOT_SERVER_PORT=" + itoa(mainPort),
 		"AGENTBOT_METRICS_PORT=" + itoa(metricsPort),
 		"AGENTBOT_METRICS_ENABLED=true",

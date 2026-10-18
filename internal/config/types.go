@@ -315,6 +315,23 @@ func DevelopmentDefault() Config {
 	//
 	// 清空 host 的语义是准确的：开发默认配置就是「没有数据库」。
 	cfg.Database.Host = ""
+	// Redis 同源同因（见 internal/app/redis_wiring.go 的决策表）：默认
+	// 配置里 host=localhost:6379 会被装配层判定为「配了 Redis」→ 探测
+	// 连接 → 拒绝启动。开发/测试机上通常没有 Redis，于是整个 internal/app
+	// 包的测试在启动阶段全部炸掉，而报错落在「redis is configured but
+	// unreachable」上 —— 看起来像环境缺依赖，实际是默认配置自己声明了
+	// 一个连不上的依赖。
+	//
+	// 这里把 host 与 port 一起清空：port 留着 6379 会让 DevelopmentDefault
+	// 与 Default 的差异只剩一个字段，将来谁把 host 填回去就又是同一个坑；
+	// 端口与 host 是一个整体（Addr() 会把它们拼成连接串），
+	// 不配 Redis 就该两个都不配。
+	//
+	// 需要真 Redis 的测试走 AGENTBOT_TEST_REDIS_ADDR 显式配置
+	// （见 internal/app/redis_wiring_test.go 的 redisTestAddr），
+	// 不依赖这份开发默认值。
+	cfg.Redis.Host = ""
+	cfg.Redis.Port = 0
 	cfg.Database.DBName = ""
 	cfg.Database.Password = ""
 	cfg.FileSystem.Root = "/tmp/agentbot-fs"
