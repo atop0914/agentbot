@@ -93,7 +93,10 @@ Agent 状态机：`idle → running ⇄ paused → stopped`，异常进入 `erro
 |------|------|------|
 | GET/POST | `/environments` | 列出 / 创建环境 |
 | GET/DELETE | `/environments/{id}` | 查询 / 销毁环境 |
-| POST | `/environments/{id}/start` \| `/stop` \| `/pause` \| `/resume` | 生命周期切换 |
+| POST | `/environments/{id}/start` | 启动 |
+| POST | `/environments/{id}/stop` | 停止 |
+| POST | `/environments/{id}/pause` | 暂停 |
+| POST | `/environments/{id}/resume` | 恢复 |
 | POST | `/environments/{id}/exec` | 执行命令 |
 | POST | `/environments/{id}/files` | 上传文件 |
 | GET | `/environments/{id}/files` | 下载 / 列目录 |
@@ -118,17 +121,30 @@ Agent 状态机：`idle → running ⇄ paused → stopped`，异常进入 `erro
 子任务状态迁移是并发安全的：异步执行结果只会在任务仍处于 `in_progress`
 时写回，不会覆盖并发的 `complete` / `fail` / `cancel`。
 
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/decompose` | 只做拆解不落库：给定目标文本，返回拆出的子任务清单 |
+
+> `/decompose` 与 `POST /tasks` 的区别：后者会**创建**任务并落库，
+> 前者是一次纯粹的「拆解预览」，可用于前端在用户确认前展示子任务。
+> 它与 `/tasks` 注册在同一个 handler 下（`internal/executor`）。
+
 ---
 
 ## 浏览器 / 终端 / 文件系统
 
-| 模块 | 路径前缀 | 说明 |
-|------|----------|------|
-| 浏览器 | `/browser/sessions` | 创建会话、导航、截图、执行脚本 |
-| 终端 | `/terminal/sessions` | 创建会话、执行命令、调整窗口 |
-| 文件系统 | `/filesystem/*` | 读取、写入、列目录、移动、复制、搜索 |
+| 模块 | 路径 | 说明 |
+|------|------|------|
+| 浏览器 | `/browsers`、`/browsers/{id}` | 创建会话、导航、截图、执行脚本 |
+| 浏览器配置 | `/browser/profiles`、`/browser/profiles/{id}`、`/browser/import-profile` | 配置导入与管理 |
+| 终端 | `/terminals`、`/terminals/{id}` | 创建会话、执行命令、调整窗口 |
+| 文件系统 | `/filesystem/read/{id}`、`/filesystem/write`、`/filesystem/list/{id}`、`/filesystem/move`、`/filesystem/copy`、`/filesystem/search`、`/filesystem/mkdir`、`/filesystem/stat/{id}`、`/filesystem/info/{id}`、`/filesystem/remove/{id}` | 读取、写入、列目录、移动、复制、搜索 |
 
-文件系统接口基于路径沙箱，所有路径都相对于配置的根目录解析。
+> ⚠️ 路径是**复数**：`/browsers`、`/terminals`。单数形式（`/browser/sessions`、
+> `/terminal/sessions`）从未注册过 —— 这条文档曾长期写错，照着调会得到 404。
+
+文件系统接口基于路径沙箱，所有路径都相对于配置的根目录解析（见
+[docs/sandbox.md](sandbox.md) 的文件系统边界一节）。
 
 ---
 
@@ -137,7 +153,8 @@ Agent 状态机：`idle → running ⇄ paused → stopped`，异常进入 `erro
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET/POST | `/adapters` | 列出 / 注册适配器 |
-| POST | `/adapters/{id}/connect` \| `/disconnect` | 连接管理 |
+| POST | `/adapters/{id}/connect` | 连接 |
+| POST | `/adapters/{id}/disconnect` | 断开 |
 | GET | `/adapters/{id}/actions` | 可用动作 |
 | POST | `/adapters/{id}/execute` | 执行动作 |
 
@@ -163,10 +180,18 @@ Agent 状态机：`idle → running ⇄ paused → stopped`，异常进入 `erro
 |------|------|------|
 | POST | `/messages` | 发送 Agent 间消息 |
 | GET | `/messages` | 收件箱 |
-| POST | `/presence/heartbeat` | 心跳上报 |
+| GET | `/messages/conversation` | 按对端查询会话（`?with=<agent_id>&limit=`） |
+| GET/POST | `/groups` | 列出 / 创建群组 |
+| POST | `/groups/join` | 加入群组 |
+| POST | `/groups/leave` | 离开群组 |
+| GET/POST | `/channels` | 列出 / 创建频道 |
 | GET/POST | `/roles` | 列出 / 创建角色 |
 | POST | `/role-assignments/{agentID}` | 分配角色 |
 | POST | `/permissions/check` | 权限校验 |
+
+> `/messages/conversation`、`/groups*`、`/channels` 曾长期未写进本文档 ——
+> 文档漏写已实现的接口是常态（加功能时最容易忘的就是文档），
+> 现已由 `internal/docs` 的一致性测试兜底。
 
 ---
 
@@ -388,6 +413,36 @@ JWKS 缓存默认 1 小时；**`kid` 未命中时强制刷新一次**，用于�
 - `high-risk tld: .xyz` —— 高风险 TLD（`.tk` `.ml` `.xyz` `.zip` 等迁移常用域）；
 - `high frequency egress: N requests in window` —— 同域名请求数超过阈值（默认 200）；
 - `direct ip literal destination` —— 直连 IP 字面量，绕过了正常的域名解析路径。
+
+---
+
+## 授权链（用户 / Agent → 角色 → 权限）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET/POST | `/authorizations` | 列出 / 创建授权关系 |
+| GET/DELETE | `/authorizations/{id}` | 查询 / 撤销授权 |
+| GET | `/authorization-audit` | 授权变更审计 |
+| GET | `/authorization-stats` | 授权统计 |
+| GET | `/permission-routes` | 查询生效中的路由权限规则表 |
+
+> `/permission-routes` 返回的是**中间件实际使用的那张表**，排障时
+> 「为什么这个请求被 403」的第一站就是它（见
+> [docs/observability.md](observability.md)）。
+
+## 用户管理（管理后台）
+
+| 方法 | 路径 | 说明 | 所需权限 |
+|------|------|------|----------|
+| GET | `/users` | 用户列表（支持分页与筛选） | `user:read` |
+| GET | `/users/{id}` | 用户详情 | `user:read` |
+| POST | `/users/{id}/status` | 启用 / 停用账号 | `user:activate` |
+
+> 停用账号走的是 `user:activate` 而非 `user:update` —— 两者是**不同**的权限。
+> 这条区分来自一次真实缺陷：路由权限表早期只支持前缀匹配，导致
+> `/users/{id}/status` 落到通配前缀规则上，等于「能改用户资料」就顺带
+> 获得「停用他人账号」的能力。现已支持「精确 / 后缀 / 前缀」三种匹配
+> 并加命名空间隔离（见 [docs/observability.md](observability.md)）。
 
 ---
 

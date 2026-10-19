@@ -18,7 +18,7 @@
 | 模块 | 接口 | LOC | 数据来源 | 迁移难度 | 排序 |
 |------|------|-----|----------|----------|------|
 | `audit` | `Repository` | 4259 | 纯自产事件 | 低：追加型、无外部引用、字段固定 | **第 1 批** |
-| `user` | `Repository` | 1509 | 纯自产用户 | 低：`internal/user/repository.go` 已有 SQL 实现雏形 | **第 1 批** |
+| `user` | `Repository` | 1509 | 纯自产用户 | 低：`internal/user/repository_postgres.go` 已有 SQL 实现雏形 | **第 1 批** |
 | `agent` | `Repository` | 1358 | 纯自产 Agent | 低：CRUD + 状态机，字段稳定 | **第 2 批** |
 | `role` / `authz` | `Repository` / `Store` | 1433 / 2140 | 纯自产授权数据 | 中：授权链读多写少，必须与权限判定同事务 | **第 2 批** |
 | `template` | `Repository` | 2747 | 纯自产模板 | 中：模板市场含共享/导入语义 | 第 3 批 |
@@ -71,7 +71,7 @@
 **结论**：**`database/sql` + `github.com/jackc/pgx/v5/stdlib`**。
 
 理由：
-1. `internal/user/repository.go` **已经**按 `*sql.DB` 写好了（含建表、CRUD、
+1. `internal/user/repository_postgres.go` **已经**按 `*sql.DB` 写好了（含建表、CRUD、
    扫描函数），只是从未被装配过。选 `database/sql` 可以让这份既有代码
    直接进入生产，而不是推倒重写。
 2. 仓库层保持 `database/sql` 抽象 → 后续若确实需要 SQLite 兜底，
