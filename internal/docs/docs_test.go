@@ -368,6 +368,94 @@ func TestDocsAPIHasNoUndocumentedModule(t *testing.T) {
 	}
 }
 
+// TestDocsInternalAnchorsResolve 断言 `file.md#anchor` 形式的内部锚点真的能落到某个标题上。
+//
+// 为什么需要：把「见第 5 节」这类**序号引用**改成锚点引用是进步（重排文档
+// 不会失效），但锚点本身是**由标题文本推导**出来的 —— 改标题就会让所有指向
+// 它的锚点静默变死链。写这条测试时我就踩到了：`## 5. ⚠️ ...` 生成的 slug
+// 是 `5--本轮...`（emoji 被规则删除后留下两个连字符），手算成 `5-本轮...`
+// 得到的是一个永远 404 的链接，而**没有任何东西会告诉你**。
+//
+// slug 规则按 GitHub 的算法复刻：转小写 → 去掉标点（保留字母数字、中文、
+// 下划线、连字符、空格）→ 空格转连字符。
+func TestDocsInternalAnchorsResolve(t *testing.T) {
+	root := repoRoot(t)
+
+	// 先收集每个文档的锚点集合。
+	anchors := map[string]map[string]bool{}
+	all := append(docsFiles(t, root), "README.md")
+	for _, rel := range all {
+		content := readRepoFile(t, root, rel)
+		set := map[string]bool{}
+		for _, h := range headingPattern.FindAllStringSubmatch(content, -1) {
+			set[githubSlug(h[1])] = true
+		}
+		anchors[rel] = set
+	}
+
+	checked := 0
+	for _, rel := range all {
+		content := readRepoFile(t, root, rel)
+		base := filepath.Dir(rel)
+
+		for _, m := range linkPattern.FindAllStringSubmatch(content, -1) {
+			target := m[1]
+			if strings.HasPrefix(target, "http") || strings.HasPrefix(target, "mailto:") {
+				continue
+			}
+			if !strings.Contains(target, "#") {
+				continue
+			}
+			parts := strings.SplitN(target, "#", 2)
+			filePart, anchor := parts[0], parts[1]
+			if anchor == "" {
+				continue
+			}
+			// 纯锚点指向本文档。
+			targetDoc := rel
+			if filePart != "" {
+				targetDoc = filepath.ToSlash(filepath.Join(base, filePart))
+			}
+			set, ok := anchors[targetDoc]
+			if !ok {
+				// 文件本身不存在，已由 TestDocsRelativeLinksResolve 报告。
+				continue
+			}
+			checked++
+			if !set[anchor] {
+				t.Errorf("%s: anchor %q not found in %s (link target %q)",
+					rel, anchor, targetDoc, target)
+			}
+		}
+	}
+
+	if checked == 0 {
+		t.Error("no internal anchors were checked; the extractor is broken")
+	}
+}
+
+// headingPattern 匹配 markdown 标题（## / ### / ####）。
+var headingPattern = regexp.MustCompile(`(?m)^#{2,6}\s+(.+?)\s*$`)
+
+// punctuationPattern 匹配 GitHub slug 算法要删除的字符：除字母、数字、
+// 下划线、连字符、空格与 CJK 之外的字符。
+var punctuationPattern = regexp.MustCompile(`[^\p{L}\p{N}_\- ]+`)
+
+// githubSlug 复刻 GitHub 的标题转锚点算法。
+//
+//	"5. ⚠️ 本轮用一个基准抓出的真 bug：连接池从未生效"
+//	→ "5--本轮用一个基准抓出的真-bug连接池从未生效"
+//
+// 注意 emoji 与全角标点被删除后可能留下**相邻的两个空格/连字符**，
+// 不能把它们折叠成一个 —— 折叠了就会算出与 GitHub 不同的锚点。
+func githubSlug(heading string) string {
+	s := strings.ToLower(strings.TrimSpace(heading))
+	// 去掉 Markdown 行内标记，避免它们影响 slug。
+	s = strings.NewReplacer("`", "", "*", "", "[", "", "]", "").Replace(s)
+	s = punctuationPattern.ReplaceAllString(s, "")
+	return strings.ReplaceAll(s, " ", "-")
+}
+
 // TestDocsCheckerDetectsBreakage 是检查器自身的回归测试。
 //
 // ⚠️ 存在的理由：上面前四条断言在**当前仓库**上都是绿的，所以「绿」不能

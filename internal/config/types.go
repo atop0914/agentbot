@@ -83,7 +83,7 @@ func (c DatabaseConfig) DSN() string {
 // Configured 表示这个部署是否声明了要使用关系型数据库。
 //
 // 判定只看 host：没写 host 就是「我用内存后端」（见 docs/persistence.md
-// 第 3 节）。这是配置层与装配层共用的唯一判定口径 —— 两处各写一份
+// 的「两套实现如何共存」）。这是配置层与装配层共用的唯一判定口径 —— 两处各写一份
 // 会出现「校验说配了、装配说没配」这种最难查的分歧。
 func (c DatabaseConfig) Configured() bool {
 	return strings.TrimSpace(c.Host) != ""
@@ -389,7 +389,7 @@ func (c Config) Validate() error {
 
 	// --- 依赖服务 ---
 	// 数据库是**可选**依赖：不配 Database.Host 表示「这个部署用内存后端」，
-	// 是合法状态（见 docs/persistence.md 第 3 节的决策表）。
+	// 是合法状态（见 docs/persistence.md「两套实现如何共存」的决策表）。
 	//
 	// 这里刻意不要求 host 非空：把「没配数据库」判为配置错误会让内存后端
 	// 在真实部署里根本无法抵达 —— 而内存后端是单元测试、本地演示与

@@ -243,6 +243,26 @@ export AGENTBOT_REDIS_HOST=127.0.0.1 AGENTBOT_REDIS_PORT=6379
 配了 Redis 但不可达时**默认拒绝启动**（可用
 `AGENTBOT_STORAGE_ALLOW_MEMORY_FALLBACK=true` 显式降级，届时日志会给 WARN）。
 
+## 文档
+
+全部文档的入口是 **[docs/index.md](docs/index.md)** —— 按「我要做什么」组织，
+而不是按文件名罗列。
+
+| 文档 | 主题 |
+|------|------|
+| [docs/index.md](docs/index.md) | 索引：按意图导航 + 架构图 + 一致性说明 |
+| [docs/api.md](docs/api.md) | HTTP 接口参考 |
+| [docs/deployment.md](docs/deployment.md) | 部署与配置分层 |
+| [docs/persistence.md](docs/persistence.md) | 持久化边界与迁移策略 |
+| [docs/redis.md](docs/redis.md) | Redis 用途、键设计、降级行为 |
+| [docs/observability.md](docs/observability.md) | 指标 / 日志分级 / 请求追踪 |
+| [docs/sandbox.md](docs/sandbox.md) | 进程级沙箱的能力与边界 |
+| [docs/performance.md](docs/performance.md) | 性能基线与复现方式 |
+
+文档不是「写完就不管」的：`internal/docs` 里的一致性测试会核对死链、锚点、
+被引用的 Go 文件、以及 api.md 与真实注册路由的对应关系。改代码或改文档后
+跑一次 `go test ./internal/docs/...`，不一致会直接失败。
+
 ## 开发约定
 
 - 存储实现遍历 map 返回列表时必须排序，保证接口输出稳定

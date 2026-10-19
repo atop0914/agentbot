@@ -15,7 +15,7 @@
 | 4 | [redis.md](redis.md) | 配 Redis | Redis 用来做什么、不配会怎样 |
 
 > **最短路径**：`AGENTBOT_AUTH_JWT_SECRET=... go run ./cmd/agentbot` 即可启动，
-> 全部外部依赖都有降级路径。三个必需机密见 [deployment.md](deployment.md) 第 1 节。
+> 全部外部依赖都有降级路径。三个必需机密见 [deployment.md 的「为什么机密没有默认值」](deployment.md#1-为什么机密没有默认值)。
 
 ## 我要理解设计取舍
 
@@ -33,8 +33,8 @@
 | 启动直接退出、提示缺环境变量 | [deployment.md](deployment.md) |
 | 接口 403，但 handler 里看着能过 | [observability.md](observability.md)（路由 + 授权链路） |
 | 数据库看起来连上了，数据却查不到 | [persistence.md](persistence.md)（后端选择 ≠ 真的落库） |
-| 数据库操作慢得不正常 | [performance.md](performance.md) 第 5 节（先查连接池，别先怪磁盘） |
-| 日志里找不到某次请求发生了什么 | [observability.md](observability.md) 第 3 节（请求追踪） |
+| 数据库操作慢得不正常 | [performance.md 的「连接池从未生效」](performance.md#5--本轮用一个基准抓出的真-bug连接池从未生效)（先查连接池，别先怪磁盘） |
+| 日志里找不到某次请求发生了什么 | [observability.md 的「请求追踪」](observability.md#3-请求追踪) |
 | 想知道某个接口怎么调 | [api.md](api.md) |
 
 ## 我要改代码 / 加接口

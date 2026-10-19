@@ -10,7 +10,7 @@ import (
 	"github.com/atop0914/agentbot/internal/storage"
 )
 
-// 本文件是「持久化后端选择」的装配点，对应 docs/persistence.md 第 3 节。
+// 本文件是「持久化后端选择」的装配点，对应 docs/persistence.md 的「两套实现如何共存」。
 //
 // 决策表：
 //

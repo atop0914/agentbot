@@ -1,12 +1,11 @@
 # AgentBot API 参考
 
-基础路径：`/api/v1`。除 `/health` 与认证注册/登录外，所有接口都需要
-`Authorization: Bearer <access_token>`。
-
-请求与响应均为 JSON。列表接口统一返回非 `null` 的数组；分页接口返回
-`total` / `limit` / `offset` / `has_more`。
-
----
+> **一句话**：全部 HTTP 接口的契约 —— 方法、路径、请求体、响应、所需权限。
+> **适用读者**：接入本平台的客户端开发者、写集成测试的人。
+> **相关**：[文档索引](index.md) · [部署配置](deployment.md) · [可观测性](observability.md)
+>
+> ⚠️ 本文档的路径与代码注册的路由由 `internal/docs` 的一致性测试自动核对
+> （`go test ./internal/docs/...`）—— 加了接口忘记写文档会被测试拦住。
 
 ## 健康检查
 

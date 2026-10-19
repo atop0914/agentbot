@@ -33,7 +33,7 @@ import (
 // DriverName 是注册到 database/sql 的驱动名。
 const DriverName = "pgx"
 
-// 默认连接池与超时参数。取值理由见 docs/persistence.md 第 4 节：
+// 默认连接池与超时参数。取值理由见 docs/persistence.md 的「连接池 / 超时 / 迁移」一节：
 // PostgreSQL 默认 max_connections=100，单实例开 25 个连接给多副本留余量。
 const (
 	defaultMaxOpenConns    = 25
@@ -130,7 +130,7 @@ type DB struct {
 //
 // DSN 为空时返回 ErrNoDSN —— 这不是异常，调用方应当据此选择内存后端。
 // DSN 非空但连不上时返回 ErrUnreachable 包装的错误，调用方要么拒绝启动，
-// 要么在显式开启回退的情况下降级（见 docs/persistence.md 第 3 节）。
+// 要么在显式开启回退的情况下降级（见 docs/persistence.md「两套实现如何共存」）。
 //
 // 返回的 *DB 即使探活失败也已关闭底层连接：否则调用方拿到 error 后
 // 无处释放，会漏连接。

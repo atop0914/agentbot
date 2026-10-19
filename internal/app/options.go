@@ -67,7 +67,7 @@ func NewWithConfig(cfg config.Config) (*App, error) {
 
 	// 选择持久化后端。这是一个**全局一次性**决策，必须先于任何仓库构造 ——
 	// 一旦有仓库先按内存建好，后面的选择就只能是「部分仓库用 Postgres」，
-	// 而这种混合状态无法从外部观察（见 docs/persistence.md 第 3 节）。
+	// 而这种混合状态无法从外部观察（见 docs/persistence.md「两套实现如何共存」）。
 	sel, err := selectStorage(context.Background(), cfg)
 	if err != nil {
 		return nil, err
