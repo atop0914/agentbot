@@ -4,15 +4,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"sync"
 	"syscall"
 	"time"
 )
-
-// cgroup2Magic 是 cgroup2fs 的 statfs f_type 值（内核源码中的 CGROUP2_SUPER_MAGIC）。
-const cgroup2Magic = 0x63677270
 
 // exitTimeout 是「命令因 wall-clock 超时被中断」的退出码。
 // 沿用 coreutils timeout(1) 的 124，让运维不必额外查文档就能认出来。
@@ -21,7 +17,10 @@ const exitTimeout = 124
 // Limited 是一个已施加限制的执行上下文，由 Manager.Prepare 返回。
 type Limited struct {
 	manager *Manager
-	cg      *cgroupV2
+	// cg 是 cgroup 句柄。类型定义只在 linux 存在，因此这里用接口持有：
+	// 非 linux 平台上它恒为 nil，且 Prepare 会把「不支持」记进 Warnings。
+	cg      cgroupHandle
+	cgPath  string
 	applied Applied
 	limits  Limits
 	agentID string
@@ -39,7 +38,7 @@ func (l *Limited) CgroupPath() string {
 	if l.cg == nil {
 		return ""
 	}
-	return l.cg.Path()
+	return l.cgPath
 }
 
 // AgentID 返回被监管的 Agent 标识。
@@ -69,31 +68,17 @@ func (l *Limited) Attach(cmd *exec.Cmd) {
 	if cmd == nil {
 		return
 	}
-	attr := &syscall.SysProcAttr{Setpgid: true}
+	attr := newSysProcAttr()
 	if cmd.SysProcAttr != nil {
 		// 保留调用方已设置的其他属性，只补我们要的两项
 		attr = cmd.SysProcAttr
-		attr.Setpgid = true
+		attr = withOwnProcessGroup(attr)
 	}
 	// CgroupFD：让内核在 clone 时就把进程放进 cgroup —— 彻底消除
 	// 「已 fork、未 attach」那段不受约束的时间窗。
-	if fd := l.cgroupFD(); fd >= 0 {
-		attr.UseCgroupFD = true
-		attr.CgroupFD = fd
-	}
+	// 该字段只存在于 linux 的 SysProcAttr，故由平台文件提供实现。
+	attr = l.applyCgroupFD(attr)
 	cmd.SysProcAttr = attr
-}
-
-// cgroupFD 打开 cgroup 目录并返回 fd，供 SysProcAttr.CgroupFD 使用。
-func (l *Limited) cgroupFD() int {
-	if l.cg == nil || l.cg.path == "" {
-		return -1
-	}
-	f, err := os.Open(l.cg.path)
-	if err != nil {
-		return -1
-	}
-	return int(f.Fd())
 }
 
 // rlimitUlimitScript 把 rlimit 配置翻译成一段 ulimit 引导脚本。
@@ -128,13 +113,13 @@ func (l *Limited) rlimitUlimitScript() string {
 func (l *Limited) Track(pid int) error {
 	l.pid = pid
 	// 立刻缓存 pgid：这是清理阶段唯一的句柄，晚一步主进程可能已被回收。
-	if pgid, err := syscall.Getpgid(pid); err == nil {
+	if pgid, err := groupOf(pid); err == nil {
 		l.pgid = pgid
 	}
 	if l.cg == nil {
 		return nil
 	}
-	if err := l.cg.Attach(pid); err != nil {
+	if err := l.attachCgroup(pid); err != nil {
 		l.applied.Warnings = append(l.applied.Warnings,
 			fmt.Sprintf("cgroup attach(pid=%d) failed, rlimit-only in effect: %v", pid, err))
 		return err
@@ -166,15 +151,15 @@ func (l *Limited) KillGroup() error {
 	pgid := l.pgid
 	if pgid <= 0 && l.pid > 0 {
 		// 兜底：TrackPID 未被调用时现问一次
-		if g, err := syscall.Getpgid(l.pid); err == nil {
+		if g, err := groupOf(l.pid); err == nil {
 			pgid = g
 		}
 	}
 	if pgid <= 0 {
 		return fmt.Errorf("sandbox: no process group to kill (pid=%d pgid=%d)", l.pid, l.pgid)
 	}
-	if err := syscall.Kill(-pgid, syscall.SIGKILL); err != nil {
-		if err == syscall.ESRCH {
+	if err := killGroup(pgid); err != nil {
+		if isNoSuchProcess(err) {
 			// 整组都已退出 —— 这是成功
 			return nil
 		}
@@ -193,7 +178,7 @@ func (l *Limited) CleanupAfter(timeout time.Duration) {
 		if l.pid <= 0 {
 			return
 		}
-		if err := syscall.Kill(l.pid, 0); err != nil {
+		if !processAlive(l.pid) {
 			return // 已退出
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -208,9 +193,10 @@ func (l *Limited) Close() {
 	}
 	if err := l.cg.Remove(); err != nil {
 		l.applied.Warnings = append(l.applied.Warnings,
-			fmt.Sprintf("cgroup cleanup failed (leftover dir %s): %v", l.cg.Path(), err))
+			fmt.Sprintf("cgroup cleanup failed (leftover dir %s): %v", l.cgPath, err))
 	}
 	l.cg = nil
+	l.cgPath = ""
 }
 
 // MemoryPeak 返回本次沙箱观测到的内存峰值（字节）；未启用 cgroup 时为 0。
@@ -218,7 +204,7 @@ func (l *Limited) MemoryPeak() uint64 {
 	if l.cg == nil {
 		return 0
 	}
-	return l.cg.PeekMemory()
+	return l.cg.MemoryPeak()
 }
 
 // OOMKilled 报告本次沙箱是否发生过 OOM kill。
