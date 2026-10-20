@@ -126,34 +126,18 @@ func (a Applied) String() string {
 	return strings.Join(parts, " ")
 }
 
-// rlimits 返回限制列表（[资源号, 值]），供 fork 后在子进程内逐个设置。
+// rlimitsRequested 报告「是否有任何一项 rlimit 被请求」。
 //
-// ⚠️ 关键事实：本 Go 版本（1.25）的 syscall.SysProcAttr **没有** Rlimits 字段
-// （Linux 上它藏在 Credential 里，而这里不需要切身份）。所以不能指望
-// 「把限制交给内核在 exec 前应用」。
+// 这里只用布尔判断，**不**返回资源号/值：rlimit 是**由子进程内的
+// ulimit 引导脚本落地**的（见 rlimitUlimitScript 与 docs/sandbox.md），
+// 父进程里根本不需要（也无法）把它们设到子进程上。
 //
-// 正确做法是用 SysProcAttr.Pdeathsig + 让子进程自己先调 Setrlimit 再 exec：
-// 即启动一个最小的引导进程。见 run.go 的 runLimited —— 引导程序在
-// fork 之后、exec 真任务之前设置 rlimit，因此限制作用于真任务本身，
-// 而不是像「父进程里调 Setrlimit」那样改到自己身上、对子进程毫无作用。
-func (l Limits) rlimits() []rlimitPair {
-	var out []rlimitPair
-	if l.CPUQuota > 0 {
-		// RLIMIT_CPU 的软限制达到时会发 SIGXCPU；这里软限制留 1s 余量，
-		// 让硬限制先触发 —— 直接打满软限制会让进程在毫无预警的情况下被杀，
-		// 排查时看不出是"超 CPU"还是"自己崩了"。
-		out = append(out, rlimitPair{Resource: rlimitCPU, Cur: uint64(l.CPUQuota), Max: uint64(l.CPUQuota) + 1})
-	}
-	if l.MaxFileSize > 0 {
-		out = append(out, rlimitPair{Resource: rlimitFSize, Cur: uint64(l.MaxFileSize), Max: uint64(l.MaxFileSize)})
-	}
-	if l.MaxOpenFiles > 0 {
-		out = append(out, rlimitPair{Resource: rlimitNOFile, Cur: uint64(l.MaxOpenFiles), Max: uint64(l.MaxOpenFiles)})
-	}
-	if l.MemoryBytes > 0 {
-		out = append(out, rlimitPair{Resource: rlimitAS, Cur: uint64(l.MemoryBytes), Max: uint64(l.MemoryBytes)})
-	}
-	return out
+// ⚠️ 历史教训：这里曾返回 `[]rlimitPair{Resource, Cur, Max}`，看起来像
+// 「这些值会被设到子进程上」，实际没有任何调用方消费它们 ——
+// 一个「看起来设置了限制、实际只改了父进程」的静默失效。
+// 删掉假的参数化路径，只保留真正有语义的判定。
+func (l Limits) rlimitsRequested() bool {
+	return l.CPUQuota > 0 || l.MaxFileSize > 0 || l.MaxOpenFiles > 0 || l.MemoryBytes > 0
 }
 
 // SysProcAttr 返回进程属性。
@@ -162,7 +146,9 @@ func (l Limits) rlimits() []rlimitPair {
 // Agent 起的 sh 会再起孙进程（go build、npm install），只杀 sh 会留下孤儿
 // 继续吃 CPU —— 这条在"进程级沙箱"里比在容器里更要紧，因为容器能整体销毁。
 func (l Limits) SysProcAttr() *syscall.SysProcAttr {
-	return &syscall.SysProcAttr{Setpgid: true}
+	// 平台差异收敛在 newSysProcAttr：linux 上带 Setpgid（自成进程组，
+	// 便于按组回收），macOS/Windows 上该字段不存在。
+	return newSysProcAttr()
 }
 
 // Manager 负责为一个被监管进程准备限制并在结束后回收。
@@ -222,10 +208,10 @@ func (m *Manager) Prepare(ctx context.Context, agentID string) (*Limited, error)
 	id := m.seq.Add(1)
 	cgroupName := fmt.Sprintf("%s-%d", sanitize(agentID), id)
 
-	var cg *cgroupV2
+	var cg cgroupHandle
 	if !m.cfg.DisableCgroup {
 		var err error
-		cg, err = newCgroupV2(m.cfg.CgroupRoot, m.cfg.CgroupBase, cgroupName, m.cfg.Limits)
+		cg, err = newPlatformCgroup(m.cfg.CgroupRoot, m.cfg.CgroupBase, cgroupName, m.cfg.Limits)
 		if err != nil {
 			// 降级：cgroup 不可用不是致命错误，但**必须**记进 Warnings，
 			// 否则调用方会以为 CPU/内存限额生效了。
@@ -240,18 +226,18 @@ func (m *Manager) Prepare(ctx context.Context, agentID string) (*Limited, error)
 	if cg != nil {
 		applied.Backend = BackendCgroupV2
 		applied.CgroupPath = cg.Path()
-		applied.cpu = cg.cpuSet
-		applied.memory = cg.memSet
-		applied.pids = cg.pidsSet
-		if cg.partial != "" {
-			applied.Warnings = append(applied.Warnings, cg.partial)
+		applied.cpu = cg.CPUEnforced()
+		applied.memory = cg.MemoryEnforced()
+		applied.pids = cg.PidsEnforced()
+		if w := cg.PartialWarning(); w != "" {
+			applied.Warnings = append(applied.Warnings, w)
 		}
 	} else {
 		applied.Backend = BackendRlimit
 	}
 
 	// rlimit 通过 SysProcAttr 附加到子进程，只要有限制项被请求就算生效。
-	if len(m.cfg.Limits.rlimits()) > 0 {
+	if m.cfg.Limits.rlimitsRequested() {
 		applied.rlimit = true
 		applied.fsize = m.cfg.Limits.MaxFileSize > 0
 		applied.nofile = m.cfg.Limits.MaxOpenFiles > 0
@@ -269,6 +255,7 @@ func (m *Manager) Prepare(ctx context.Context, agentID string) (*Limited, error)
 	return &Limited{
 		manager: m,
 		cg:      cg,
+		cgPath:  cgroupPathOf(cg),
 		applied: applied,
 		limits:  m.cfg.Limits,
 		agentID: agentID,

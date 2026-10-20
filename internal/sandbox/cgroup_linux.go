@@ -32,6 +32,15 @@ type cgroupV2 struct {
 // Path 返回 cgroup 目录路径。
 func (c *cgroupV2) Path() string { return c.path }
 
+// CPUEnforced / MemoryEnforced / PidsEnforced 报告**实际写入成功**的控制器。
+// 刻意不暴露原始字段：调用方要的是「生效了吗」，而不是「结构体里存了什么」。
+func (c *cgroupV2) CPUEnforced() bool    { return c.cpuSet }
+func (c *cgroupV2) MemoryEnforced() bool { return c.memSet }
+func (c *cgroupV2) PidsEnforced() bool   { return c.pidsSet }
+
+// PartialWarning 返回部分控制器写入失败的说明。
+func (c *cgroupV2) PartialWarning() string { return c.partial }
+
 // newCgroupV2 在 root/base 下创建一个名为 name 的 cgroup 并写入限额。
 func newCgroupV2(root, base, name string, l Limits) (*cgroupV2, error) {
 	// 1. 必须是 cgroup2fs —— 否则下面所有写入都会以
@@ -126,7 +135,7 @@ func (c *cgroupV2) Attach(pid int) error {
 
 // PeekMemory 读取峰值内存用量（字节），用于验证 memory.max 真的起作用。
 // 返回 0 表示该控制器未启用或读取失败。
-func (c *cgroupV2) PeekMemory() uint64 {
+func (c *cgroupV2) MemoryPeak() uint64 {
 	if c == nil {
 		return 0
 	}

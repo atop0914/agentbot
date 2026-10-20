@@ -51,6 +51,16 @@ build-all: ## 交叉编译全部平台到 dist/
 	done
 	@cd dist && sha256sum * > checksums.txt && echo "checksums written to dist/checksums.txt"
 
+.PHONY: build-check
+build-check: ## 逐个平台只编译不产出（发版前的交叉编译闸门）
+	@set -e; for platform in $(PLATFORMS); do \
+		goos=$${platform%/*}; goarch=$${platform#*/}; \
+		echo "compile-check $$goos/$$goarch"; \
+		GOOS=$$goos GOARCH=$$goarch CGO_ENABLED=0 \
+			go build -trimpath -o /dev/null $(CMD); \
+	done
+	@echo "all platforms compile"
+
 .PHONY: test
 test: ## 运行测试（-short，跳过容器依赖用例）
 	go test -short -race -count=1 ./...
@@ -76,7 +86,7 @@ fmt: ## 格式化
 	gofmt -s -w .
 
 .PHONY: check
-check: fmt vet test ## 本地提交前的完整闸门
+check: fmt vet build-check test ## 本地提交前的完整闸门（含交叉编译）
 
 .PHONY: run
 run: ## 本地运行（需先导出 AUTH_JWT_SECRET / DATABASE_PASSWORD）
