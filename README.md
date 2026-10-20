@@ -4,7 +4,7 @@
 
 企业级 AI 智能体平台。部署自主运行的 AI Agent，支持任务分解、浏览器自动化、多 Agent 协作。
 
-当前版本：**v1.0.0**（24 个业务包，`go test -short -race` 全绿）
+当前版本：**v1.1.0**（30 个包，`go test -short -race` 全绿）
 
 ## 技术栈
 
@@ -16,8 +16,10 @@
 
 ## 发布
 
-- **v1.0.0** — [Release 页面](https://github.com/atop0914/agentbot/releases/tag/v1.0.0)，
-  5 个平台二进制 + `checksums.txt`（sha256 与 GitHub 侧摘要一致）
+- **v1.1.0** — [Release 页面](https://github.com/atop0914/agentbot/releases/tag/v1.1.0)，
+  5 个平台二进制 + `checksums.txt`。相对 v1.0.0：PostgreSQL 持久化、Prometheus
+  指标面、进程级沙箱、React 管理控制台、Redis 跨副本吊销与登录限流、文档站
+- **v1.0.0** — [Release 页面](https://github.com/atop0914/agentbot/releases/tag/v1.0.0)
 
 ## 项目结构
 
@@ -104,7 +106,7 @@ make lint         # golangci-lint（未安装时给出安装命令）
 校验注入是否生效：
 
 ```bash
-./bin/agentbot --version   # agentbot v1.0.0 (commit 170eb51, built ..., go1.25.6, linux/amd64)
+./bin/agentbot --version   # agentbot v1.1.0 (commit ..., built ..., go1.25.6, linux/amd64)
 ```
 
 ### 管理控制台前端
