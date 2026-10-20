@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -20,8 +21,10 @@ import (
 	"github.com/atop0914/agentbot/internal/executor"
 	"github.com/atop0914/agentbot/internal/filesystem"
 	"github.com/atop0914/agentbot/internal/memory"
+	"github.com/atop0914/agentbot/internal/metrics"
 	"github.com/atop0914/agentbot/internal/monitor"
 	"github.com/atop0914/agentbot/internal/network"
+	"github.com/atop0914/agentbot/internal/redis"
 	"github.com/atop0914/agentbot/internal/role"
 	"github.com/atop0914/agentbot/internal/sso"
 	"github.com/atop0914/agentbot/internal/storage"
@@ -95,6 +98,29 @@ type App struct {
 	StorageBackend string
 	// DB 与 Storage 指向同一句柄，别名保留给「取底层 *sql.DB」的调用点。
 	DB *storage.DB
+	// 可观测性（Day 3-7）。Metrics 是零依赖的指标注册表，
+	// HTTP 层的打点由装配层完成（见 metrics_wiring.go）。
+	//
+	// 注册表挂在这里的理由与 Config 相同：排障时要能问
+	// 「这个进程到底注册了哪些指标」，而不是去 grep 源码。
+	Metrics *metrics.Registry
+	// MetricsH 是 /metrics 的 handler。为什么也挂出来：
+	// 单测需要在不启动真实监听的情况下直接打这个 handler。
+	MetricsH http.Handler
+	// httpMetrics 是 HTTP 层指标的持有者。不导出：它是装配细节，
+	// 外部只应通过 /metrics 的文本观察，而不是直接摸计数器对象。
+	httpMetrics *httpMetrics
+
+	// Redis 是 Redis 客户端；未配置 Redis（或回退到内存）时为 nil。
+	// 挂出来的理由与 Storage 相同：排障时要能问「这个进程到底连了没有」。
+	Redis *redis.Client
+	// RedisBackend 是 Redis 后端标识（memory / redis），用于日志与诊断。
+	RedisBackend string
+	// RateLimiter 是跨副本限流器；回退到内存时为 nil（此时不限流）。
+	//
+	// nil 表示「不限制」而不是「限制为零」：把 nil 当成零额度
+	// 会让一个未配置 Redis 的部署变成全站 429。
+	RateLimiter *redis.RateLimiter
 }
 
 // New creates a new App with all in-memory services wired up.
@@ -109,7 +135,7 @@ type App struct {
 // 之前的版本在 app.New() 里硬编码了 `Secret: "dev-secret-change-in-production"`，
 // 那是一行「开发方便、生产致命」的代码：任何部署只要忘了注入密钥就会
 // 带着一个公开可伪造的密钥跑起来，而且完全不报错。
-func build(cfg config.Config, logger *slog.Logger, db *storage.DB) (*App, error) {
+func build(cfg config.Config, logger *slog.Logger, db *storage.DB, rsel redisSelection) (*App, error) {
 	// 持久化后端在这里落地：db 为 nil 表示内存后端，否则用 Postgres 实现。
 	//
 	// 为什么把 *storage.DB 显式传进来，而不是在 build 里再判断一次配置：
@@ -117,7 +143,27 @@ func build(cfg config.Config, logger *slog.Logger, db *storage.DB) (*App, error)
 	// 并贯彻到底。若 build 自己再读一遍配置，就会产出「选择器说内存、
 	// 装配层说 postgres」这类最难查的分歧（3-3 那轮踩过：
 	// 配置层与装配层各写一份判定，两边对不上）。
+	//
+	// Redis 的选择（rsel）走完全相同的约定，理由也一样。
 	dbHandle := sqlDB(db)
+
+	// 指标面（Day 3-7）。在任何业务组件之前建立注册表，理由：
+	// 后面每个模块的装配都可能失败，而「装配失败的原因」本身也是要观测的 ——
+	// 若注册表在末尾才建，早期失败就只剩一行 stderr，没有任何指标可看。
+	//
+	// 命名空间 agentbot_ 是固定的：同一个 Prometheus 抓多个服务时
+	// 无前缀的 http_requests_total 会与其他服务撞名并被静默合并。
+	metricReg := metrics.NewRegistry("agentbot")
+	httpMetrics, err := newHTTPMetrics(metricReg)
+	if err != nil {
+		return nil, errors.Join(errMetricsSetupFailed, err)
+	}
+	// 存储后端的选择在 options.go 里已经做完（这里的 db 就是结论），
+	// 因此这里只是把**结论**翻译成指标，不再做任何判定 ——
+	// 两处各判一次会产出「指标说 postgres、实际用内存」这类分歧。
+	if err := registerStorageMetrics(metricReg, backendOf(db), cfg.Storage.AllowMemoryFallback); err != nil {
+		return nil, errors.Join(errMetricsSetupFailed, err)
+	}
 
 	// User service：配了数据库就用 Postgres 实现，否则内存。
 	// 内存实现**不删除** —— 它是回退路径，且被契约测试持续覆盖。
@@ -139,8 +185,25 @@ func build(cfg config.Config, logger *slog.Logger, db *storage.DB) (*App, error)
 	}
 	jwtMgr := auth.NewJWTManager(jwtCfg)
 	oauthCfgs := make(map[string]*auth.OAuthConfig)
-	authSvc := auth.NewService(jwtMgr, userSvc, oauthCfgs)
+	// 吊销表由装配层注入（见 redis_wiring.go）：多副本部署下必须共享，
+	// 否则一个副本上的登出对另一个副本无效 —— 用户看到 200，
+	// 安全动作却没有生效，且没有任何外部信号。
+	authSvc := auth.NewService(jwtMgr, userSvc, oauthCfgs, rsel.revocations)
+	// 登录暴力破解防护：只有拿到共享限流器时才挂上。
+	// rsel.limiter 为 nil（未配置 Redis / 已回退）时不挂 ——
+	// 宁愿不限流，也不要退回一个「多副本下等于没限」的假限流
+	// （那会让运维以为已经有了防护）。
 	authHandler := auth.NewHandler(authSvc)
+	if rsel.limiter != nil {
+		// 阈值/窗口来自配置（0 表示用 auth 包的内置默认值）。
+		// 可配置的理由：共享出口 IP 的办公场景更容易撞到按 IP
+		// 计数的阈值，运维需要能调；写死就只能改代码。
+		guard := auth.NewLoginGuard(newRedisLoginLimiter(rsel.limiter))
+		if cfg.Auth.LoginRateLimit > 0 || cfg.Auth.LoginRateWindow > 0 {
+			guard = guard.WithLimit(cfg.Auth.LoginRateLimit, cfg.Auth.LoginRateWindow)
+		}
+		authHandler.WithLoginGuard(guard, logger)
+	}
 	authMW := auth.NewMiddleware(authSvc)
 
 	// Agent service：与 user/audit 同一口径 —— 配了数据库就用 Postgres 实现，
@@ -435,6 +498,9 @@ func build(cfg config.Config, logger *slog.Logger, db *storage.DB) (*App, error)
 		TenantH:      tenantH,
 		SSOSvc:       ssoSvc,
 		SSOH:         ssoH,
+		Metrics:      metricReg,
+		MetricsH:     metricReg.Handler(logger),
+		httpMetrics:  httpMetrics,
 	}, nil
 }
 

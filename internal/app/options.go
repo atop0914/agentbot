@@ -67,7 +67,7 @@ func NewWithConfig(cfg config.Config) (*App, error) {
 
 	// 选择持久化后端。这是一个**全局一次性**决策，必须先于任何仓库构造 ——
 	// 一旦有仓库先按内存建好，后面的选择就只能是「部分仓库用 Postgres」，
-	// 而这种混合状态无法从外部观察（见 docs/persistence.md 第 3 节）。
+	// 而这种混合状态无法从外部观察（见 docs/persistence.md「两套实现如何共存」）。
 	sel, err := selectStorage(context.Background(), cfg)
 	if err != nil {
 		return nil, err
@@ -77,15 +77,37 @@ func NewWithConfig(cfg config.Config) (*App, error) {
 		"storage.host", storageHostForLog(cfg),
 		"storage.fallback_allowed", cfg.Storage.AllowMemoryFallback)
 
-	a, err := build(cfg, logger, sel.db)
+	// 选择 Redis 后端。与持久化同理：这是**全局一次性**决策，
+	// 必须先于 auth.Service 构造 —— 若先按内存建好服务，
+	// 后续再想换就只能在运行时替换内部状态（本仓库没有那种路径）。
+	rsel, err := selectRedis(context.Background(), cfg)
 	if err != nil {
-		// build 失败时装配未完成，DB 的所有权还在本函数手上 —— 必须关掉，
-		// 否则每次启动失败都会漏一个连接池。
 		if sel.db != nil {
 			_ = sel.db.Close()
 		}
 		return nil, err
 	}
+	// 启动日志必须显式写出 Redis 后端：部署时「吊销状态存在哪」
+	// 只能从这行日志回答，不能靠猜。回退到内存时降级为 Warn ——
+	// 这是一个**安全性下降**的状态，不该与正常状态同样醒目。
+	logRedisBackend(logger, cfg, rsel)
+
+	a, err := build(cfg, logger, sel.db, rsel)
+	if err != nil {
+		// build 失败时装配未完成，DB 与 Redis 的所有权还在本函数手上 ——
+		// 必须都关掉，否则每次启动失败都会漏一个连接池。
+		if sel.db != nil {
+			_ = sel.db.Close()
+		}
+		if rsel.client != nil {
+			_ = rsel.client.Close()
+		}
+		return nil, err
+	}
+
+	// 启动日志写出指标端点的实际路径：配置里 metrics.path 可改，
+	// 若静默使用，排障时会出现「按默认路径抓不到指标」的困惑。
+	logMetricsPath(logger, a.MetricsPath())
 
 	// 所有权移交：从这里起由 App 持有，调用方负责 Close。
 	// 注意**不能**用 defer 关它 —— 那会在 NewWithConfig 返回的瞬间
@@ -93,7 +115,35 @@ func NewWithConfig(cfg config.Config) (*App, error) {
 	a.Storage = sel.db
 	a.StorageBackend = sel.backend
 	a.DB = sel.db
+	// Redis 客户端同样移交所有权（App.Close 会关它）。
+	a.Redis = rsel.client
+	a.RedisBackend = rsel.backend
+	a.RateLimiter = rsel.limiter
 	return a, nil
+}
+
+// logRedisBackend 写出 Redis 后端选择。
+//
+// 「配了 Redis 但回退到内存」必须是 Warn 级：这个状态本身能跑，
+// 但多副本下登出与限流只在单副本内生效 —— 一个安全性下降的部署
+// 不该与正常部署在日志里长得一样。
+func logRedisBackend(logger *slog.Logger, cfg config.Config, sel redisSelection) {
+	fields := []any{
+		"redis.backend", sel.backend,
+		"redis.host", redisHostForLog(cfg),
+		"redis.fallback_allowed", cfg.Storage.AllowMemoryFallback,
+	}
+	if sel.backend == redisBackendRedis {
+		logger.Info("redis backend selected", fields...)
+		return
+	}
+	if cfg.Redis.Configured() {
+		// 配了却用内存 = 回退。必须响亮。
+		logger.Warn("redis configured but falling back to in-process state: "+
+			"credential revocation and rate limiting will only apply to this replica", fields...)
+		return
+	}
+	logger.Info("redis backend selected", fields...)
 }
 
 // newLogger 按配置构造 slog 日志器。

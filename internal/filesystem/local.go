@@ -32,6 +32,21 @@ func NewLocalManager(basePath string) (*LocalManager, error) {
 }
 
 // safePath 将用户路径限制在 basePath 内
+//
+// ⚠️ 这里原先是 `strings.HasPrefix(abs, m.basePath)` —— 一个**会静默放行**的判定。
+// 前缀匹配把「路径字符串以 base 开头」当成了「路径在 base 之内」，但两者不等价：
+//
+//	base = /root/fs
+//	/root/fs-evil/escape.txt   → HasPrefix 为 true，实际在 base 之外
+//
+// 只要宿主上存在一个与 base 同前缀的兄弟目录（备份目录、`.bak`、`-old` 之类
+// 在真实部署里几乎必然存在），`../../fs-evil/x` 就能读写到沙箱之外。
+// 注意 `filepath.Clean` 拦不住它 —— 清理后依然是 `/root/fs-evil/...`，
+// 是**前缀判定本身**不够严格，不是路径没归一化。
+//
+// 判定必须基于**相对路径**：解析到绝对路径后用 filepath.Rel 求相对关系，
+// 只有相对路径既不是 ".." 也不以 "../" 开头，才说明真的落在 base 之内。
+// 这也顺带解决了 base 就是根 "/" 的边界情形（前缀比对在那种场景会失效）。
 func (m *LocalManager) safePath(p string) (string, error) {
 	// 清理路径
 	cleaned := filepath.Clean(p)
@@ -42,11 +57,28 @@ func (m *LocalManager) safePath(p string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("invalid path: %w", err)
 	}
-	// 路径逃逸检查
-	if !strings.HasPrefix(abs, m.basePath) {
+	if !withinBase(m.basePath, abs) {
 		return "", fmt.Errorf("path %q is outside base directory", p)
 	}
 	return abs, nil
+}
+
+// withinBase 判断 abs 是否真的位于 base 之内（含 base 自身）。
+//
+// 与 cloud.resolveInWorkPath 用同一套语义：先解析、再用相对路径判定。
+// 不要退回字符串前缀比较 —— 那是这条路径上曾经的漏洞来源。
+// 两侧都先 EvalSymlinks 不到（目标可能尚不存在），故此处只做词法判定；
+// 软链接逃逸由调用方在打开文件时另行约束（见 docs/sandbox.md 的能力边界）。
+func withinBase(base, abs string) bool {
+	rel, err := filepath.Rel(base, abs)
+	if err != nil {
+		// 无法比较（如不同盘符）→ 视为越界，fail-closed
+		return false
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return true
 }
 
 func (m *LocalManager) ReadFile(ctx context.Context, path string) (*FileContent, error) {

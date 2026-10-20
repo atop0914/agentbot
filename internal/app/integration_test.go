@@ -28,11 +28,25 @@ func newTestServer(t *testing.T) *httptest.Server {
 // 拒绝）。因此每个测试都必须在一个**显式授权**的会话里发起请求 —— 这本身就是
 // 对「默认拒绝」的持续验证，而不是为了通过测试而绕过中间件。
 type testEnv struct {
-	t       *testing.T
-	server  *httptest.Server
-	app     *App
+	t      *testing.T
+	server *httptest.Server
+	app    *App
+	// client 是这条测试专属的 HTTP 客户端，**不用 http.DefaultClient**：
+	// 每个 testEnv 都起一个 httptest.Server，DefaultClient 的连接池会在
+	// 整个测试包内累积到几百个空闲连接（-race 下内存放大数倍）。本机实测
+	// 2 vCPU / 1.9GB 上整包 -race 运行会因此把测试进程压到停滞、5 分钟超时。
+	// 用独立客户端并在 Cleanup 里关闭空闲连接，把「连接数不随测试数增长」
+	// 变成结构性保证。
+	client  *http.Client
 	token   string
 	adminID string
+}
+
+// closeIdleConnections 在测试结束时归还连接，避免连接池跨测试累积。
+func (e *testEnv) closeIdleConnections() {
+	if e.client != nil {
+		e.client.CloseIdleConnections()
+	}
 }
 
 // newTestEnv 启动服务器并创建一个拥有全部权限的管理员用户。
@@ -42,7 +56,13 @@ func newTestEnv(t *testing.T) *testEnv {
 	ts := httptest.NewServer(NewRouter(a))
 	t.Cleanup(ts.Close)
 
-	env := &testEnv{t: t, server: ts, app: a}
+	env := &testEnv{
+		t:      t,
+		server: ts,
+		app:    a,
+		client: &http.Client{Timeout: 30 * time.Second},
+	}
+	t.Cleanup(env.closeIdleConnections)
 	env.bootstrapAdmin(t)
 	return env
 }
@@ -64,7 +84,7 @@ func (e *testEnv) bootstrapAdmin(t *testing.T) {
 	// 1. 注册一个用户（注册接口是公开路由）。
 	email := fmt.Sprintf("admin-%d@example.com", time.Now().UnixNano())
 	body := fmt.Sprintf(`{"email":%q,"username":"adminuser","password":"Str0ngPass!123"}`, email)
-	resp, err := http.Post(ts.URL+"/api/v1/auth/register", "application/json", bytes.NewBufferString(body))
+	resp, err := e.client.Post(ts.URL+"/api/v1/auth/register", "application/json", bytes.NewBufferString(body))
 	if err != nil {
 		t.Fatalf("register admin: %v", err)
 	}
@@ -89,7 +109,7 @@ func (e *testEnv) bootstrapAdmin(t *testing.T) {
 	// 若 user.id 缺失，则用登录接口重新拿一次（登录同样返回 user + token）。
 	if reg.User.ID == "" {
 		loginBody := fmt.Sprintf(`{"email":%q,"password":"Str0ngPass!123"}`, email)
-		loginResp, err := http.Post(ts.URL+"/api/v1/auth/login", "application/json", bytes.NewBufferString(loginBody))
+		loginResp, err := e.client.Post(ts.URL+"/api/v1/auth/login", "application/json", bytes.NewBufferString(loginBody))
 		if err != nil {
 			t.Fatalf("login admin: %v", err)
 		}
@@ -128,7 +148,7 @@ func (e *testEnv) do(method, path, body string) *http.Response {
 	if e.token != "" {
 		req.Header.Set("Authorization", "Bearer "+e.token)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := e.client.Do(req)
 	if err != nil {
 		e.t.Fatalf("%s %s: %v", method, path, err)
 	}
@@ -142,7 +162,7 @@ func (e *testEnv) doAnon(method, path string) *http.Response {
 	if err != nil {
 		e.t.Fatalf("new anon request: %v", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := e.client.Do(req)
 	if err != nil {
 		e.t.Fatalf("%s %s: %v", method, path, err)
 	}
@@ -170,7 +190,7 @@ func (e *testEnv) get(url string) (*http.Response, error) {
 		return nil, err
 	}
 	e.authorize(req)
-	return http.DefaultClient.Do(req)
+	return e.client.Do(req)
 }
 
 // post 发送带认证的 POST 请求。
@@ -183,7 +203,7 @@ func (e *testEnv) post(url, contentType string, body io.Reader) (*http.Response,
 		req.Header.Set("Content-Type", contentType)
 	}
 	e.authorize(req)
-	return http.DefaultClient.Do(req)
+	return e.client.Do(req)
 }
 
 // newRequest 构造带认证的请求（不接受错误返回，保持原调用点简洁）。
@@ -233,7 +253,7 @@ func (a *authRequest) Do() (*http.Response, error) {
 // doRaw 兼容 http.DefaultClient.Do(req) 的调用形状：把请求补上认证后发送。
 func (e *testEnv) doRaw(req *http.Request) (*http.Response, error) {
 	e.authorize(req)
-	return http.DefaultClient.Do(req)
+	return e.client.Do(req)
 }
 
 // createAgent 创建并返回一个 Agent ID。
@@ -388,9 +408,17 @@ func TestAuthLoginInvalidCredentials(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		// The auth handler returns error via appErr, check for non-200
-		t.Logf("login status = %d (expected non-200 for bad creds)", resp.StatusCode)
+	// 断言**精确的**状态码 401，而不是「非 200」。
+	//
+	// 原先只 t.Logf 记录了状态码、从不失败 —— 而 500 也满足「非 200」，
+	// 于是一个真实的错误分类缺陷（user.ValidatePassword 返回裸错误
+	// → errors.FromError 落进 default 分支 → 500）长期绿着。
+	// 实测：修复前这里的输出是 `login status = 500`。
+	//
+	// 教训：断言「不是 X」几乎总是太弱。要断言**就是 Y**。
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("login status = %d, want %d for bad credentials",
+			resp.StatusCode, http.StatusUnauthorized)
 	}
 }
 

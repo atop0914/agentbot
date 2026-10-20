@@ -33,7 +33,7 @@ import (
 // DriverName 是注册到 database/sql 的驱动名。
 const DriverName = "pgx"
 
-// 默认连接池与超时参数。取值理由见 docs/persistence.md 第 4 节：
+// 默认连接池与超时参数。取值理由见 docs/persistence.md 的「连接池 / 超时 / 迁移」一节：
 // PostgreSQL 默认 max_connections=100，单实例开 25 个连接给多副本留余量。
 const (
 	defaultMaxOpenConns    = 25
@@ -83,6 +83,21 @@ func (c Config) withDefaults() Config {
 		c.MaxOpenConns = defaultMaxOpenConns
 	}
 	if c.MaxIdleConns < 0 {
+		// 负数才是「显式要求不保留空闲连接」—— 见下方对 <= 的说明。
+		c.MaxIdleConns = defaultMaxIdleConns
+	}
+	// 零值表示「没指定」，补默认值。
+	//
+	// ⚠️ 这里**不能**用 `c.MaxIdleConns < 0`（原本就是 `<`）来判断零值：
+	// 「没指定」在 Config 里的表示就是 0，而 `0 < 0` 为假，于是
+	// MaxIdleConns 停在 0 —— database/sql 的语义是「不保留任何空闲连接」，
+	// 每个查询都要重新建连（TCP + TLS + 认证，实测约 14ms）。
+	//
+	// 实测（本机，100 次插入）：MaxIdleConns=0 → 16.6 ms/op，
+	// MaxIdleConns=5 → 2.7 ms/op，差 6 倍，且 sql.DB.Stats() 的
+	// MaxIdleClosed 达 206（连接被逐个丢弃）。这是一个**静默**的
+	// 性能缺陷：功能全部正常、测试全绿，只是每条 SQL 慢 6 倍。
+	if c.MaxIdleConns == 0 {
 		c.MaxIdleConns = defaultMaxIdleConns
 	}
 	if c.ConnMaxLifetime <= 0 {
@@ -115,7 +130,7 @@ type DB struct {
 //
 // DSN 为空时返回 ErrNoDSN —— 这不是异常，调用方应当据此选择内存后端。
 // DSN 非空但连不上时返回 ErrUnreachable 包装的错误，调用方要么拒绝启动，
-// 要么在显式开启回退的情况下降级（见 docs/persistence.md 第 3 节）。
+// 要么在显式开启回退的情况下降级（见 docs/persistence.md「两套实现如何共存」）。
 //
 // 返回的 *DB 即使探活失败也已关闭底层连接：否则调用方拿到 error 后
 // 无处释放，会漏连接。

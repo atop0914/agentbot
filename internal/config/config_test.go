@@ -468,6 +468,43 @@ func TestValidate_EmptyRedisHostIsNotAnError(t *testing.T) {
 	}
 }
 
+// TestDevelopmentDefaultDeclaresNoExternalDependencies 钉住开发默认配置的
+// 不变式：**它不能声明任何需要外部进程的依赖**。
+//
+// 为什么值得单独一条测试：这个坑已经踩过两次（先 database，后 redis），
+// 两次的症状完全一样 —— `go test ./...` 在启动阶段整体炸掉，报错说的是
+// 「依赖连不上」，看不出真正的原因是「开发默认值沿用了生产默认值里那个
+// localhost 地址」。装配层的 fail-closed 是对的（配了就必须能连上，
+// 否则静默降级会让跨副本登出失效），所以修法只能在这里：开发默认配置
+// 就该是「没有外部依赖」。
+//
+// 断言的是 Configured() / DatabaseConfigured() 这类**装配层真正读的判定**，
+// 而不是字段字面量 —— 后者在判定逻辑变化时会静默失效。
+func TestDevelopmentDefaultDeclaresNoExternalDependencies(t *testing.T) {
+	cfg := DevelopmentDefault()
+
+	if cfg.DatabaseConfigured() {
+		t.Errorf("development default must not declare a database, got host=%q", cfg.Database.Host)
+	}
+	if cfg.Redis.Configured() {
+		t.Errorf("development default must not declare Redis, got addr=%q", cfg.Redis.Addr())
+	}
+	// port 必须一并清空：留着 6379 而 host 为空虽然当下无害，
+	// 但会让「把 host 填回去」这个改动悄悄复活上面那个坑。
+	if cfg.Redis.Port != 0 {
+		t.Errorf("development default must clear redis.port too, got %d", cfg.Redis.Port)
+	}
+
+	// 反向断言：默认配置（生产形态）**应该**声明这些依赖 ——
+	// 否则上面两条会因为「判定永远返回 false」而假性通过。
+	if !Default().Redis.Configured() {
+		t.Fatal("Default() must declare Redis, otherwise this test proves nothing")
+	}
+	if !Default().DatabaseConfigured() {
+		t.Fatal("Default() must declare a database, otherwise this test proves nothing")
+	}
+}
+
 func TestValidate_RejectsRedisPortOutOfRangeWhenConfigured(t *testing.T) {
 	// 反向断言：真的配了 Redis 就必须给可用端口，否则连接串会指向死地址。
 	for _, port := range []int{-1, 0, 70000} {

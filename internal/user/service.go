@@ -6,6 +6,8 @@ import (
 	"fmt"
 
 	"golang.org/x/crypto/bcrypt"
+
+	apperrors "github.com/atop0914/agentbot/internal/pkg/errors"
 )
 
 // UserService 用户服务实现
@@ -132,13 +134,31 @@ func (s *UserService) List(offset, limit int) ([]*User, int, error) {
 }
 
 // ValidatePassword 验证密码
+//
+// ⚠️ 所有「凭据无效」的错误都必须 %w 包装 apperrors.ErrInvalidPassword。
+//
+// 此前这里返回的是裸 fmt.Errorf，而 handler 用 errors.FromError 做分类：
+// 裸错误落进 default 分支 → **500 而不是 401**。
+// 实测确认：`POST /api/v1/auth/login` 用错密码返回 500。
+//
+// 为什么这个 bug 能长期存在：既有的集成测试只断言 `status != 200`
+// （见 integration_test.go 的 TestAuthLoginInvalidCredentials），
+// 而 500 也满足「不是 200」。断言过弱让一个真实的错误分类缺陷
+// 一直绿着 —— 这也是本轮把它一起修掉的原因（否则限流测试
+// 会一直看到 500 而无法判断 429 是否生效）。
+//
+// 「账号不存在」与「密码错误」共用同一个对外的错误与文案是**有意**的：
+// 若两者可区分，登录接口就变成了账号枚举工具
+// （攻击者据此判断某个邮箱是否已注册）。
 func (s *UserService) ValidatePassword(email, password string) (*User, error) {
 	user, err := s.repo.GetByEmail(email)
 	if err != nil {
+		// 查库失败不是「凭据无效」：保持原样返回，让它落进 500。
+		// 把它伪装成 401 会让一次数据库故障看起来像用户输错了密码。
 		return nil, err
 	}
 	if user == nil {
-		return nil, fmt.Errorf("invalid email or password")
+		return nil, fmt.Errorf("%w: invalid email or password", apperrors.ErrInvalidPassword)
 	}
 
 	// 状态检查在密码校验之前：停用/封禁账号即使密码正确也不得登录。
@@ -147,11 +167,13 @@ func (s *UserService) ValidatePassword(email, password string) (*User, error) {
 	}
 
 	if user.PasswordHash == "" {
+		// 无密码的账号（例如仅 OAuth）：这不是「密码错了」，
+		// 而是「这个账号不能用密码登录」，属于不可用而非未授权。
 		return nil, fmt.Errorf("password login not available for this account")
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
-		return nil, fmt.Errorf("invalid email or password")
+		return nil, fmt.Errorf("%w: invalid email or password", apperrors.ErrInvalidPassword)
 	}
 
 	return user, nil

@@ -1,11 +1,9 @@
 package cloud
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -13,6 +11,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/atop0914/agentbot/internal/sandbox"
 )
 
 // LocalManager 基于本地进程的环境管理器
@@ -21,6 +21,12 @@ type LocalManager struct {
 	mu           sync.RWMutex
 	environments map[string]*localEnv
 	workDir      string
+	// sandbox 为每个环境的命令执行施加资源限制。
+	// 为 nil 时退化为无限制执行 —— 那是一个**必须被察觉**的状态，
+	// 因此 NewLocalManager 总会初始化它（见构造函数注释）。
+	sandbox *sandbox.Manager
+	// execTimeout 是单条命令的 wall-clock 上限（0 = 使用 defaultExecTimeout）
+	execTimeout time.Duration
 }
 
 // localEnv 包装本地环境的额外状态
@@ -41,7 +47,49 @@ func NewLocalManager(workDir string) (*LocalManager, error) {
 	return &LocalManager{
 		environments: make(map[string]*localEnv),
 		workDir:      workDir,
+		sandbox:      sandbox.New(sandbox.DefaultConfig()),
 	}, nil
+}
+
+// SandboxConfig 覆盖沙箱限制配置。
+//
+// ⚠️ cgroup 的能力探测发生在真正 Apply 的时刻（见 sandbox.New 注释），
+// 因此这里不需要（也无法）在装配阶段判断「本机支不支持 cgroup」。
+func (m *LocalManager) SandboxConfig(cfg sandbox.Config) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sandbox = sandbox.New(cfg)
+}
+
+// defaultExecTimeout 是单条命令的 wall-clock 上限。
+//
+// 取值理由：本仓库的典型命令是 go build / npm install 这类分钟级操作，
+// 60s 会误伤它们。这里取 5 分钟 —— 足够跑完一次完整构建，
+// 又不至于让失控命令占用宿主太久。
+const defaultExecTimeout = 5 * time.Minute
+
+// ExecTimeout 返回单条命令的 wall-clock 上限。
+func (m *LocalManager) ExecTimeout() time.Duration {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.execTimeout <= 0 {
+		return defaultExecTimeout
+	}
+	return m.execTimeout
+}
+
+// SetExecTimeout 覆盖单条命令的超时上限（<=0 时恢复默认）。
+func (m *LocalManager) SetExecTimeout(d time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.execTimeout = d
+}
+
+// Sandbox 返回当前的沙箱管理器（可能为 nil，调用方需自行判空）。
+func (m *LocalManager) Sandbox() *sandbox.Manager {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.sandbox
 }
 
 // Create 创建新的本地环境
@@ -239,30 +287,47 @@ func (m *LocalManager) ExecuteCommand(ctx context.Context, envID string, command
 
 	start := time.Now()
 
-	// 使用 sh -c 执行命令，工作目录为环境目录
-	cmd := exec.CommandContext(ctx, "sh", "-c", command)
-	cmd.Dir = local.workPath
+	// ⚠️ 这里原先直接 exec.CommandContext("sh", "-c", command)，命令在宿主机上
+	// **毫无边界**地运行。改为经 sandbox 施加 cgroup v2 + rlimit 限制。
+	//
+	// 同时这也修掉一个静默挂死的隐患：直接 cmd.Run() 在「脚本里带后台任务」
+	// 时不会返回 —— 后台孙进程持有输出管道的写端，Wait 会一直等管道关闭
+	// （实测：即使 sh 已被 SIGKILL，Wait 仍阻塞）。sandbox.Run 用
+	// wall-clock 上限兜住这种情形并按进程组回收整棵树。
+	sbx := m.Sandbox()
+	if sbx == nil {
+		// 构造时总会初始化沙箱；走到这里说明装配被绕过，
+		// 直接报错而不是悄悄退回无限制执行 —— 「没有边界的沙箱」比明确的失败更危险。
+		return nil, fmt.Errorf("cloud: sandbox is not configured for environment %s", envID)
+	}
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
+	// ⚠️ 这里必须给一个**明确的** wall-clock 上限，不能传 0 让沙箱取默认值。
+	//
+	// 原因：`sh -c "cmd & sleep 30"` 这类脚本里，sh 自己会一直等到
+	// 后台任务结束才退出（实测证实：即使把后台任务的输出重定向或 disown，
+	// sh 仍然在等）。此时 "命令是否执行完" 与 "sh 是否退出" 是两件事，
+	// 而调用方需要的是前者 —— 后台任务应当立刻返回。
+	//
+	// 因此采用「等待主命令的合理时长，超时即按进程组回收整棵树」的策略：
+	// 一个正常命令（go build / npm install）需要的时间远小于这个上限；
+	// 真超时的命令应当被中断并且不留孤儿。上限本身可经 ExecTimeout 配置。
+	res, err := sbx.Run(ctx, local.AgentID, local.workPath, command, m.ExecTimeout())
+	if err != nil {
+		return nil, fmt.Errorf("execute command in %s: %w", envID, err)
+	}
 	duration := time.Since(start)
 
-	exitCode := 0
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			exitCode = exitErr.ExitCode()
-		} else {
-			exitCode = -1
-		}
+	// 把实际生效的限制暴露出来：调用方（与运维）需要能区分
+	// 「命令真的被限制了」与「降级到只有 rlimit」。
+	if !res.Applied.AnyEnforced() {
+		return nil, fmt.Errorf("cloud: environment %s ran without any resource limit (%s)",
+			envID, res.Applied.String())
 	}
 
 	return &ExecResult{
-		ExitCode: exitCode,
-		Stdout:   stdout.String(),
-		Stderr:   stderr.String(),
+		ExitCode: res.ExitCode,
+		Stdout:   res.Stdout,
+		Stderr:   res.Stderr,
 		Duration: duration,
 	}, nil
 }

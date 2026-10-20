@@ -13,7 +13,7 @@ import (
 // repository_postgres.go 是 Repository 的 PostgreSQL 实现。
 //
 // 表结构由 storage 的 0001_baseline 迁移创建（users），本文件不建表 ——
-// 「一个表只有一个归属」见 docs/persistence.md 第 5 节。
+// 「一个表只有一个归属」见 docs/persistence.md 的「分批计划与回退点」一节。
 //
 // 语义必须与 memory.go 的实现逐条对齐，并由
 // repository_contract_test.go 里同一组断言强制。三处容易走偏的地方：

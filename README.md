@@ -9,9 +9,10 @@
 ## 技术栈
 
 - Go 1.25+ (net/http 标准库)
-- PostgreSQL + Redis（规划中，当前为内存实现）
+- PostgreSQL（持久化，已落地 audit / user / agent 三个仓库）+ Redis（跨副本吊销与限流）
 - JWT 认证 + bcrypt 密码哈希
-- 零第三方 Web 框架与日志库：依赖只有 JWT、uuid、websocket、go-redis、x/crypto
+- 零第三方 Web 框架与日志库：依赖只有 JWT、uuid、websocket、pgx、x/crypto
+  （Redis 客户端为自实现的 RESP2，见 `internal/redis`）
 
 ## 发布
 
@@ -86,8 +87,9 @@ agentbot/
 ### 规划中
 
 - [ ] PostgreSQL 持久化（已落地 audit / user / agent 三个仓库，其余待迁）
-- [ ] Redis 缓存与分布式锁（配置面已存在，尚未落地真用途）
-- [ ] Agent 运行时（容器隔离，依赖 Docker）
+- [x] Redis 落地真用途：跨副本凭据吊销 + 登录暴力破解防护（见 `docs/redis.md`）
+- [ ] 限流覆盖更多敏感端点（注册 / 密码重置 / OAuth 回调）
+- [ ] Agent 运行时（容器隔离，依赖 Docker；本机无 Docker，已由进程级沙箱替代）
 
 ## 构建
 
@@ -144,7 +146,7 @@ go test -short ./...        # 运行测试（-short 跳过依赖 Docker 的用�
 # 本地开发：显式注入一组仅用于本地的机密（生产路径不会这样跑）
 export AGENTBOT_AUTH_JWT_SECRET="$(openssl rand -base64 48)"
 export AGENTBOT_DATABASE_PASSWORD="$(openssl rand -base64 24)"
-go run ./cmd/agentbot        # 默认 :8080，指标 :9090
+go run ./cmd/agentbot        # 业务 :8080，指标 :9090
 
 # 容器编排
 cd deploy/docker && cp .env.example .env   # 填入两个机密
@@ -173,6 +175,8 @@ docker compose up -d
 
 ```
 GET    /health                        健康检查
+GET    /metrics                       指标（Prometheus 文本格式，匿名可达）
+                                      独立端口 :9090 提供同一份内容
 
 POST   /api/v1/auth/register          注册
 POST   /api/v1/auth/login             登录
@@ -198,6 +202,66 @@ POST   /api/v1/auth/login             登录
        /admin/*                        管理后台前端静态资源
        /api/v1/ws                      WebSocket 实时通道
 ```
+
+## 可观测性
+
+完整说明见 [docs/observability.md](docs/observability.md)。
+
+```
+GET /metrics        Prometheus 文本格式，**匿名可达**（抓取端不持有平台 JWT）
+                    :8080 与独立端口 :9090 提供**同一份**内容
+GET /health         健康检查
+```
+
+- **指标**：HTTP 请求数/延迟直方图/状态类、存储后端、panic 计数、进程 uptime。
+  `route` 标签是**路由模板**（`/api/v1/agents/{id}/start`）而非真实路径 ——
+  真实 ID 进标签值会让 Prometheus 内存随资源数线性膨胀。
+- **日志**：`AGENTBOT_LOG_LEVEL` 控制。成功的访问日志在 `debug`，
+  4xx 在 `warn`，5xx 在 `error` —— 默认级别下日志里只有启动信息与真正的错误。
+- **追踪**：`X-Request-ID` 会回传响应头（尊重上游传入的值），并写进 context，
+  业务代码用 `app.RequestIDFromContext(ctx)` 取到同一个值打日志。
+
+## Redis
+
+Redis 承担两个用途，都是**跨副本的安全状态**（见 `docs/redis.md`）：
+
+1. **凭据吊销**：登出后同一 token 在所有副本立即失效。
+   进程内实现下，副本 A 的登出对副本 B 无效 —— 用户看到 200，
+   安全动作却没有生效。
+2. **登录暴力破解防护**：失败次数按账号 + 来源 IP 双维度在共享存储计数，
+   超限返回 `429` + `Retry-After`。
+
+```bash
+# 本机（无 Docker，apt 非容器安装）
+apt-get update -qq && apt-get install -y --no-install-recommends redis-server
+redis-server --daemonize yes --port 6379 --save '' --appendonly no
+export AGENTBOT_REDIS_HOST=127.0.0.1 AGENTBOT_REDIS_PORT=6379
+```
+
+未配置 Redis 时吊销用进程内实现、**不启用限流**：
+宁可明确地不限流，也不要一个「多副本下等于没限」的假限流。
+配了 Redis 但不可达时**默认拒绝启动**（可用
+`AGENTBOT_STORAGE_ALLOW_MEMORY_FALLBACK=true` 显式降级，届时日志会给 WARN）。
+
+## 文档
+
+全部文档的入口是 **[docs/index.md](docs/index.md)** —— 按「我要做什么」组织，
+而不是按文件名罗列。
+
+| 文档 | 主题 |
+|------|------|
+| [docs/index.md](docs/index.md) | 索引：按意图导航 + 架构图 + 一致性说明 |
+| [docs/api.md](docs/api.md) | HTTP 接口参考 |
+| [docs/deployment.md](docs/deployment.md) | 部署与配置分层 |
+| [docs/persistence.md](docs/persistence.md) | 持久化边界与迁移策略 |
+| [docs/redis.md](docs/redis.md) | Redis 用途、键设计、降级行为 |
+| [docs/observability.md](docs/observability.md) | 指标 / 日志分级 / 请求追踪 |
+| [docs/sandbox.md](docs/sandbox.md) | 进程级沙箱的能力与边界 |
+| [docs/performance.md](docs/performance.md) | 性能基线与复现方式 |
+
+文档不是「写完就不管」的：`internal/docs` 里的一致性测试会核对死链、锚点、
+被引用的 Go 文件、以及 api.md 与真实注册路由的对应关系。改代码或改文档后
+跑一次 `go test ./internal/docs/...`，不一致会直接失败。
 
 ## 开发约定
 

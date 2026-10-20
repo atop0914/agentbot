@@ -10,7 +10,7 @@ import (
 	"github.com/atop0914/agentbot/internal/storage"
 )
 
-// 本文件覆盖 docs/persistence.md 第 3 节的四条决策分支。
+// 本文件覆盖 docs/persistence.md「两套实现如何共存」的四条决策分支。
 // 「后端选择」是全局一次性决策，走错分支的后果差异极大
 // （从「静默丢数据」到「拒绝启动」），所以四条都要有断言。
 

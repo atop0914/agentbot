@@ -83,7 +83,7 @@ func (c DatabaseConfig) DSN() string {
 // Configured 表示这个部署是否声明了要使用关系型数据库。
 //
 // 判定只看 host：没写 host 就是「我用内存后端」（见 docs/persistence.md
-// 第 3 节）。这是配置层与装配层共用的唯一判定口径 —— 两处各写一份
+// 的「两套实现如何共存」）。这是配置层与装配层共用的唯一判定口径 —— 两处各写一份
 // 会出现「校验说配了、装配说没配」这种最难查的分歧。
 func (c DatabaseConfig) Configured() bool {
 	return strings.TrimSpace(c.Host) != ""
@@ -105,6 +105,17 @@ func (c RedisConfig) Addr() string {
 	return fmt.Sprintf("%s:%d", c.Host, c.Port)
 }
 
+// Configured 判定是否声明了 Redis。
+//
+// 这是**全项目唯一**的判定入口（与 DatabaseConfig.Configured /
+// SSOConfig.Configured 同一约定）：配置层与装配层各写一份字符串判断，
+// 会产出「校验说配了、装配说没配」这类最难查的分歧。
+// 本轮之前 Redis 没有这个方法 —— 装配层若直接看 Host != ""
+// 就又埋了一份重复判定。
+func (c RedisConfig) Configured() bool {
+	return c.Host != ""
+}
+
 // AuthConfig 是认证与令牌配置。
 type AuthConfig struct {
 	// JWTSecret 是令牌签名密钥，**机密**：无默认值，长度下限 32 字节。
@@ -112,6 +123,16 @@ type AuthConfig struct {
 	AccessExpiry  time.Duration `json:"access_expiry"`
 	RefreshExpiry time.Duration `json:"refresh_expiry"`
 	Issuer        string        `json:"issuer"`
+
+	// LoginRateLimit 是登录失败次数的上限（0 表示用内置默认 10）。
+	//
+	// 为什么做成配置项而不是常量：窗口长度与阈值因部署而异 ——
+	// 面向公网的部署想要更严，内网办公场景可能想要更宽松
+	// （共享出口 IP 的人群更容易撞到按 IP 计数的阈值）。
+	// 把它写死在代码里，运维唯一的调节手段就是改代码。
+	LoginRateLimit int `json:"login_rate_limit"`
+	// LoginRateWindow 是登录失败计数的窗口（0 表示用内置默认 15 分钟）。
+	LoginRateWindow time.Duration `json:"login_rate_window"`
 }
 
 // SSOConfig 是企业 OIDC 接入配置。
@@ -304,6 +325,23 @@ func DevelopmentDefault() Config {
 	//
 	// 清空 host 的语义是准确的：开发默认配置就是「没有数据库」。
 	cfg.Database.Host = ""
+	// Redis 同源同因（见 internal/app/redis_wiring.go 的决策表）：默认
+	// 配置里 host=localhost:6379 会被装配层判定为「配了 Redis」→ 探测
+	// 连接 → 拒绝启动。开发/测试机上通常没有 Redis，于是整个 internal/app
+	// 包的测试在启动阶段全部炸掉，而报错落在「redis is configured but
+	// unreachable」上 —— 看起来像环境缺依赖，实际是默认配置自己声明了
+	// 一个连不上的依赖。
+	//
+	// 这里把 host 与 port 一起清空：port 留着 6379 会让 DevelopmentDefault
+	// 与 Default 的差异只剩一个字段，将来谁把 host 填回去就又是同一个坑；
+	// 端口与 host 是一个整体（Addr() 会把它们拼成连接串），
+	// 不配 Redis 就该两个都不配。
+	//
+	// 需要真 Redis 的测试走 AGENTBOT_TEST_REDIS_ADDR 显式配置
+	// （见 internal/app/redis_wiring_test.go 的 redisTestAddr），
+	// 不依赖这份开发默认值。
+	cfg.Redis.Host = ""
+	cfg.Redis.Port = 0
 	cfg.Database.DBName = ""
 	cfg.Database.Password = ""
 	cfg.FileSystem.Root = "/tmp/agentbot-fs"
@@ -351,7 +389,7 @@ func (c Config) Validate() error {
 
 	// --- 依赖服务 ---
 	// 数据库是**可选**依赖：不配 Database.Host 表示「这个部署用内存后端」，
-	// 是合法状态（见 docs/persistence.md 第 3 节的决策表）。
+	// 是合法状态（见 docs/persistence.md「两套实现如何共存」的决策表）。
 	//
 	// 这里刻意不要求 host 非空：把「没配数据库」判为配置错误会让内存后端
 	// 在真实部署里根本无法抵达 —— 而内存后端是单元测试、本地演示与
@@ -370,11 +408,14 @@ func (c Config) Validate() error {
 			problems = append(problems, fmt.Sprintf("database.port out of range: %d", c.Database.Port))
 		}
 	}
-	// Redis 目前只是一个**预留的配置面**：没有任何代码路径 import go-redis，
-	// 持久化仍是内存实现。因此 redis.host 为空表示「未配置 Redis」，是合法状态；
-	// 若把非空校验留在这里，用户显式写 redis.host="" 时反而会被拒绝 ——
-	// 那恰好是「我不用 Redis」的正确表达。
-	// 仅当**配了** host 时才校验端口是否可用。
+	// Redis 自本轮起不再是预留配置面：internal/redis 提供了零依赖的
+	// RESP2 客户端，凭据吊销表与限流计数由它承载（多副本共享）。
+	//
+	// 语义约定（与 database 一致）：
+	//   - redis.host 为空 = 「不使用 Redis」，这是合法状态 ——
+	//     单副本部署用内存实现即可。显式留空不能被校验惩罚。
+	//   - 配了 host 才校验端口范围。
+	// 是否真的启用 Redis 由装配层看 Redis.Configured() 决定。
 	if c.Redis.Host != "" {
 		if c.Redis.Port < 1 || c.Redis.Port > 65535 {
 			problems = append(problems, fmt.Sprintf("redis.port out of range: %d", c.Redis.Port))

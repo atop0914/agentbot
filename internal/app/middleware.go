@@ -4,13 +4,17 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
-	"time"
 
-	"github.com/google/uuid"
+	"github.com/atop0914/agentbot/internal/metrics"
 )
 
 // recoveryMiddleware catches panics and returns 500.
-func recoveryMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
+//
+// 它同时承担 panic **计数**：metricsMiddleware 在最内层，panic 传播时
+// 它后面的统计代码根本走不到，因此 panics_total 只能在 recovery 里记 ——
+// 若把这条计数写在 metricsMiddleware 里，它会永远为 0（一个永不触发的
+// 告警指标比没有指标更危险：看着有监控，实际瞎了）。
+func recoveryMiddleware(logger *slog.Logger, m *httpMetrics) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer func() {
@@ -21,25 +25,12 @@ func recoveryMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
 						"method", r.Method,
 						"path", r.URL.Path,
 					)
+					if m != nil {
+						m.panics.Inc(metrics.NormalizePath(r.URL.Path))
+					}
 					http.Error(w, "internal server error", http.StatusInternalServerError)
 				}
 			}()
-			next.ServeHTTP(w, r)
-		})
-	}
-}
-
-// requestIDMiddleware adds a unique request ID to each request.
-// If the request already has an X-Request-ID header, it reuses it.
-func requestIDMiddleware() func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			reqID := r.Header.Get("X-Request-ID")
-			if reqID == "" {
-				reqID = uuid.New().String()
-			}
-			w.Header().Set("X-Request-ID", reqID)
-			r.Header.Set("X-Request-ID", reqID)
 			next.ServeHTTP(w, r)
 		})
 	}
@@ -61,27 +52,6 @@ func corsMiddleware() func(http.Handler) http.Handler {
 			}
 
 			next.ServeHTTP(w, r)
-		})
-	}
-}
-
-// loggingMiddleware logs each request with method, path, status, duration.
-func loggingMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			start := time.Now()
-			sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
-
-			next.ServeHTTP(sw, r)
-
-			logger.Info("request",
-				"method", r.Method,
-				"path", r.URL.Path,
-				"status", sw.status,
-				"duration_ms", time.Since(start).Milliseconds(),
-				"request_id", r.Header.Get("X-Request-ID"),
-				"remote", r.RemoteAddr,
-			)
 		})
 	}
 }

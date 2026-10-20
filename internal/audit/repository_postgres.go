@@ -15,7 +15,7 @@ import (
 // repository_postgres.go 是 Repository 的 PostgreSQL 实现。
 //
 // 表结构不是本文件建的 —— 它由 storage 的 0001_baseline 迁移创建
-// （audit_events）。这里只做读写，理由见 docs/persistence.md 第 5 节：
+// （audit_events）。这里只做读写，理由见 docs/persistence.md 的「两套实现如何共存」一节：
 // 「一个表只有一个归属」，迁移与仓库分成两处会产出「谁该建表」的分歧。
 //
 // 语义必须与 repository.go 的 memory 实现**逐条对齐**。这不是「尽量一致」，

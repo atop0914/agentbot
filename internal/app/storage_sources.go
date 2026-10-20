@@ -10,7 +10,7 @@ import (
 	"github.com/atop0914/agentbot/internal/storage"
 )
 
-// 本文件是「持久化后端选择」的装配点，对应 docs/persistence.md 第 3 节。
+// 本文件是「持久化后端选择」的装配点，对应 docs/persistence.md 的「两套实现如何共存」。
 //
 // 决策表：
 //
@@ -117,4 +117,16 @@ func storageHostForLog(cfg config.Config) string {
 		return ""
 	}
 	return fmt.Sprintf("%s:%d/%s", db.Host, db.Port, db.DBName)
+}
+
+// redisHostForLog 返回可用于日志的 Redis 位置（host:port/db）。
+//
+// 与 storageHostForLog 同一原则：**绝不返回密码**。
+// 只给位置信息，足够回答「连的是哪个实例、哪个库」。
+func redisHostForLog(cfg config.Config) string {
+	r := cfg.Redis
+	if !r.Configured() {
+		return ""
+	}
+	return fmt.Sprintf("%s:%d/%d", r.Host, r.Port, r.DB)
 }

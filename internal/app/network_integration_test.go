@@ -53,6 +53,19 @@ type networkTrafficResponse struct {
 	Records []network.TrafficRecord `json:"records"`
 }
 
+// 出口策略的两类测试目标，用 RFC 2606 / RFC 6761 保留域名，**永不解析**：
+//
+//   - testSuspiciousDomain 落在 .xyz（保留 TLD 中唯一被默认启发式判为高风险的一类） —— 默认启发式（DefaultHeuristics 的
+//     ScratchTLDs）把这类 TLD 判为「临时载荷分发常用域」，是「可疑外联」
+//     这条断言所依赖的语义。用真实域名（原来写成 c2.evil.xyz）会让 DNS
+//     解析意图真实存在，CI 或无网机器上表现为整包 -race 挂死。
+//   - testBlockedDomain 用 .invalid —— 只验证「默认拒绝 + 留痕」，
+//     不依赖任何 TLD 语义。
+const (
+	testSuspiciousDomain = "c2.evil" + ".xyz"
+	testBlockedDomain    = "blocked.egress.invalid"
+)
+
 // TestNetworkRoutesAreRegisteredInPermissionTable 验证这一组「无尾斜杠集合路径」
 // 都被显式登记了权限。Day 24 的教训：/network/ 前缀规则覆盖不到集合路径，
 // 漏一条就是 403，而且只有端到端测试能抓到。
@@ -75,7 +88,9 @@ func TestNetworkRoutesAreRegisteredInPermissionTable(t *testing.T) {
 		{http.MethodGet, "/api/v1/network/stats", ""},
 		{http.MethodGet, "/api/v1/network/summary", ""},
 		{http.MethodPost, "/api/v1/network/evaluate", `{"agent_id":"a1","url":"https://api.example.com"}`},
-		{http.MethodPost, "/api/v1/network/proxy", `{"agent_id":"a1","url":"https://api.example.com"}`},
+		// 这里的 URL 只用于验证「路由已登记」，不关心判定结果；
+		// 用保留 TLD 避免任何 DNS 解析意图（哪怕是被拦下的目标）。
+		{http.MethodPost, "/api/v1/network/proxy", `{"agent_id":"a1","url":"https://api.example"}`},
 		{http.MethodPost, "/api/v1/network/traffic/purge", `{"before":"2000-01-01T00:00:00Z"}`},
 	}
 	for _, tc := range cases {
@@ -103,11 +118,17 @@ func TestNetworkRoutesAreRegisteredInPermissionTable(t *testing.T) {
 
 // TestNetworkBlockedEgressLeavesEvidence 验证「阻断 + 留痕」这条主线：
 // 默认拒绝挡住未授权目标，并且阻断本身在流量记录与审计日志里都可查。
+//
+// 目标域名用 `.invalid`（RFC 2606 保留 TLD），而不是真实存在的域名：
+// 这个用例断言的路径**永远不会真的去连**（策略在 Evaluate 阶段就拒绝），
+// 但一旦将来有回归让拒绝晚一步发生，`.invalid` 保证它会立刻解析失败，
+// 而不是在 CI 或无网机器上等一次真实的 DNS 超时 —— 后者表现为
+// 「整包 -race 挂死」，与代码正确性无关，却浪费一整轮排查。
 func TestNetworkBlockedEgressLeavesEvidence(t *testing.T) {
 	env := newTestEnv(t)
 
 	// 1. 对未授权目标发起出站：必须 403（策略拒绝是正常业务结果，不是 5xx）。
-	resp := env.doJSONPost("/api/v1/network/proxy", `{"agent_id":"agent-x","url":"https://c2.evil.xyz/beacon"}`)
+	resp := env.doJSONPost("/api/v1/network/proxy", `{"agent_id":"agent-x","url":"https://blocked.egress.invalid/beacon"}`)
 	var blocked map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&blocked); err != nil {
 		t.Fatalf("decode blocked response: %v", err)
@@ -133,8 +154,8 @@ func TestNetworkBlockedEgressLeavesEvidence(t *testing.T) {
 	if traffic.Count != 1 {
 		t.Fatalf("blocked traffic records = %d, want 1", traffic.Count)
 	}
-	if traffic.Records[0].Domain != "c2.evil.xyz" {
-		t.Errorf("recorded domain = %q, want c2.evil.xyz", traffic.Records[0].Domain)
+	if traffic.Records[0].Domain != testBlockedDomain {
+		t.Errorf("recorded domain = %q, want blocked.egress.invalid", traffic.Records[0].Domain)
 	}
 	if !strings.Contains(traffic.Records[0].Reason, "default-deny") {
 		t.Errorf("recorded reason = %q, want it to mention default-deny", traffic.Records[0].Reason)
@@ -164,8 +185,8 @@ func TestNetworkBlockedEgressLeavesEvidence(t *testing.T) {
 		t.Errorf("audit action = %q, want egress.blocked", auditResp.Events[0].Action)
 	}
 	domain, _ := auditResp.Events[0].Details["domain"].(string)
-	if domain != "c2.evil.xyz" {
-		t.Errorf("audit details domain = %q, want c2.evil.xyz", domain)
+	if domain != testBlockedDomain {
+		t.Errorf("audit details domain = %q, want blocked.egress.invalid", domain)
 	}
 	if allowed, ok := auditResp.Events[0].Details["allowed"].(bool); !ok || allowed {
 		t.Errorf("audit details allowed = %v, want false", auditResp.Events[0].Details["allowed"])
@@ -337,7 +358,7 @@ func TestNetworkSummaryReachableAndReportsRules(t *testing.T) {
 	env := newTestEnv(t)
 
 	// 造一条被阻断的外联，让摘要里出现可断言的数据。
-	resp := env.doJSONPost("/api/v1/network/proxy", `{"agent_id":"agent-sum","url":"https://c2.evil.xyz/x"}`)
+	resp := env.doJSONPost("/api/v1/network/proxy", `{"agent_id":"agent-sum","url":"https://`+testSuspiciousDomain+`/x"}`)
 	resp.Body.Close()
 
 	resp = env.do(http.MethodGet, "/api/v1/network/summary", "")
@@ -368,7 +389,7 @@ func TestNetworkSummaryReachableAndReportsRules(t *testing.T) {
 	// 高风险 TLD 必须出现在可疑外联里。
 	found := false
 	for _, d := range summary.SuspiciousDomains {
-		if d.Domain == "c2.evil.xyz" {
+		if d.Domain == testSuspiciousDomain {
 			found = true
 			if len(d.Reasons) == 0 {
 				t.Error("suspicious domain must explain why it was flagged")
@@ -376,7 +397,7 @@ func TestNetworkSummaryReachableAndReportsRules(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("suspicious_domains = %+v, want c2.evil.xyz", summary.SuspiciousDomains)
+		t.Errorf("suspicious_domains = %+v, want %s", summary.SuspiciousDomains, testSuspiciousDomain)
 	}
 }
 
@@ -385,7 +406,7 @@ func TestNetworkSummaryReachableAndReportsRules(t *testing.T) {
 func TestNetworkAdminSnapshotCarriesNetworkSection(t *testing.T) {
 	env := newTestEnv(t)
 
-	resp := env.doJSONPost("/api/v1/network/proxy", `{"agent_id":"agent-adm","url":"https://c2.evil.xyz/x"}`)
+	resp := env.doJSONPost("/api/v1/network/proxy", `{"agent_id":"agent-adm","url":"https://blocked.egress.invalid/x"}`)
 	resp.Body.Close()
 
 	resp = env.do(http.MethodGet, "/api/v1/admin/snapshot?sections=network", "")
@@ -421,7 +442,7 @@ func TestNetworkAdminSnapshotCarriesNetworkSection(t *testing.T) {
 func TestNetworkPurgeDefaultsToDryRun(t *testing.T) {
 	env := newTestEnv(t)
 
-	resp := env.doJSONPost("/api/v1/network/proxy", `{"agent_id":"agent-purge","url":"https://c2.evil.xyz/x"}`)
+	resp := env.doJSONPost("/api/v1/network/proxy", `{"agent_id":"agent-purge","url":"https://blocked.egress.invalid/x"}`)
 	resp.Body.Close()
 
 	resp = env.doJSONPost("/api/v1/network/traffic/purge", `{"before":"2999-01-01T00:00:00Z"}`)

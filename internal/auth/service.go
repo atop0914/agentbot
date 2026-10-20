@@ -20,21 +20,42 @@ type Service struct {
 	passwordManager *PasswordManager
 	userService     user.Service
 	oauthConfigs    map[string]*OAuthConfig
-	tokenBlacklist  map[string]time.Time // 简单实现，生产环境应使用 Redis
+	// revocations 是凭据吊销表。
+	//
+	// 此前这里是 tokenBlacklist map[string]time.Time —— 进程内状态，
+	// 多副本部署下 A 副本登出后 B 副本仍接受同一 token 直到自然过期。
+	// 改成抽象后，装配层按配置注入内存实现（单副本）或 Redis 实现
+	// （多副本共享）。接口是同步的，Redis 实现内部自带超时边界。
+	revocations RevocationStore
+	// revokeTTL 是吊销记录的存活时长，通常等于 access token 的有效期。
+	revokeTTL time.Duration
 }
 
-// NewService 创建认证服务
+// NewService 创建认证服务。
+//
+// 不提供不带 RevocationStore 的重载：让「吊销表」成为必填参数，
+// 是为了避免出现一个「忘了传、于是静默退回进程内」的装配路径 ——
+// 那正是本次要修的问题。显式传 NewMemoryRevocationStore() 也可以，
+// 但那是一个看得见的决定。
 func NewService(
 	jwtManager *JWTManager,
 	userService user.Service,
 	oauthConfigs map[string]*OAuthConfig,
+	revocations RevocationStore,
 ) *Service {
+	ttl := jwtManager.config.AccessExpiry
+	if ttl <= 0 {
+		// 配置异常时给一个保守值：吊销记录宁可活得久一点，
+		// 也不能因为 0 而被拒绝写入（那会让登出彻底失效）。
+		ttl = time.Hour
+	}
 	return &Service{
 		jwtManager:      jwtManager,
 		passwordManager: NewPasswordManager(),
 		userService:     userService,
 		oauthConfigs:    oauthConfigs,
-		tokenBlacklist:  make(map[string]time.Time),
+		revocations:     revocations,
+		revokeTTL:       ttl,
 	}
 }
 
@@ -159,18 +180,47 @@ func (s *Service) IssueTokens(claims *Claims) (*TokenPair, error) {
 
 // ValidateAccessToken 验证 Access Token
 func (s *Service) ValidateAccessToken(token string) (*Claims, error) {
-	// 检查黑名单
-	if _, blacklisted := s.tokenBlacklist[token]; blacklisted {
-		return nil, fmt.Errorf("token has been revoked")
+	claims, err := s.jwtManager.ValidateAccessToken(token)
+	if err != nil {
+		return nil, err
 	}
 
-	return s.jwtManager.ValidateAccessToken(token)
+	// 先验签、再查吊销表：签名无效的 token 不该触发一次存储查询
+	// （否则伪造 token 就成了放大 Redis 负载的手段）。
+	//
+	// 注意 UserID 取自**已验证的 claims**，而不是可由调用方传入的参数 ——
+	// 否则「伪造任意 userID」就能查询/影响别人的吊销记录。
+	fp := Fingerprint(token)
+	revoked, err := s.revocations.IsRevoked(claims.UserID, fp)
+	if err != nil {
+		// 查不到 ≠ 没被吊销。把存储故障当成「未吊销」会让一次抖动
+		// 等于「所有已登出的 token 全部复活」——那比拒绝服务更糟，
+		// 因为它静默地撤销了用户的安全动作。
+		// 这里选择 fail-closed：认证失败，但错误信息指明是存储问题，
+		// 而不是伪装成「token 无效」让人去查 token 本身。
+		return nil, fmt.Errorf("%w: %w", ErrRevocationUnavailable, err)
+	}
+	if revoked {
+		return nil, ErrTokenRevoked
+	}
+
+	return claims, nil
 }
 
 // Logout 用户登出
+//
+// 吊销是按**具体凭据指纹**而不是按用户：按用户吊销会连带废掉
+// 该用户刚签发的新 token（例如在多设备上重新登录后，
+// 其中一个设备登出会让所有设备掉线）。
 func (s *Service) Logout(userID, accessToken string) error {
-	// 将 token 加入黑名单（简单实现）
-	s.tokenBlacklist[accessToken] = time.Now().Add(s.jwtManager.config.AccessExpiry)
+	if accessToken == "" {
+		return nil
+	}
+	// TTL 取自 token 的自然有效期：凭据一旦自然过期，吊销记录
+	// 就再无意义，让它自动消失即可，不需要任何清理任务。
+	if err := s.revocations.Revoke(userID, Fingerprint(accessToken), s.revokeTTL); err != nil {
+		return fmt.Errorf("failed to revoke credential: %w", err)
+	}
 	return nil
 }
 
