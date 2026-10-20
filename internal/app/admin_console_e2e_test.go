@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/atop0914/agentbot/internal/config"
 )
@@ -55,7 +56,11 @@ func newConsoleApp(t *testing.T, dir string) *testEnv {
 
 	// 控制台静态资源路由本身是 public（见 authz 权限表），
 	// 因此这里不需要 token —— 用 testEnv 只是为了复用 do() 的请求构造。
-	return &testEnv{t: t, server: ts, app: a}
+	// client 必须显式给：testEnv 的所有请求都走它而不是 http.DefaultClient
+	// （理由见 testEnv.client 的注释）。
+	env := &testEnv{t: t, server: ts, app: a, client: &http.Client{Timeout: 30 * time.Second}}
+	t.Cleanup(env.closeIdleConnections)
+	return env
 }
 
 // newConsoleAdminEnv 在指定静态目录的基础上，额外创建一个有 role:manage

@@ -261,7 +261,7 @@ func TestPersistence_AuditEventsLandInPostgres(t *testing.T) {
 
 	// 未授权目标 → default-deny 阻断，并落一条 egress.blocked 审计事件。
 	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/v1/network/proxy",
-		bytes.NewBufferString(`{"agent_id":"agent-audit","url":"https://c2.evil.xyz/beacon"}`))
+		bytes.NewBufferString(`{"agent_id":"agent-audit","url":"https://c2.evil.invalid/beacon"}`))
 	if err != nil {
 		t.Fatalf("build proxy request: %v", err)
 	}
