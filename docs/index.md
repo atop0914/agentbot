@@ -23,6 +23,7 @@
 |------|-----------|-----------|
 | [persistence.md](persistence.md) | 质疑「为什么不直接全上 DB」 | 为什么分批迁移、为什么内存实现必须留着、两套实现如何共存 |
 | [sandbox.md](sandbox.md) | 想知道隔离做到什么程度 | 进程级沙箱的边界在哪、哪里**不是**安全边界、与容器的差距 |
+| [mcp.md](mcp.md) | 要接外部工具 server | 支持哪些 MCP 方法、四类错误怎么区分、server 进程由谁管 |
 | [redis.md](redis.md) | 想知道为什么失败方向不一致 | 哪些组件 fail-open、哪些 fail-closed、为什么刻意相反 |
 | [performance.md](performance.md) | 想改连接池 / 怀疑慢了 | 基线数字是多少、怎么复现、慢的时候先查什么 |
 
