@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 	"sync"
@@ -183,9 +184,24 @@ func (l *Limited) Pgid() int { return l.pgid }
 //
 // ⚠️ Stop 必须被调用（defer 即可）：它负责杀整个进程组并回收 cgroup。
 // 漏掉的代价是宿主上留一个吃 CPU 的孤儿 + 一个无法删除的 cgroup 目录。
+// Stdio 标识要接管的标准流，用于 Manager.Start 的 opts。
+type Stdio int
+
+const (
+	// Stdin 是子进程的标准输入（客户端写入）。
+	Stdin Stdio = iota
+	// Stdout 是子进程的标准输出（客户端读取）。MCP 协议消息走这里。
+	Stdout
+	// Stderr 是子进程的标准错误（客户端读取）。日志走这里。
+	Stderr
+)
+
 type Supervisor struct {
 	lim *Limited
 	cmd *exec.Cmd
+	// pipes 保存被接管的标准流（只在 Start 传了 PipeStdio 时非空）。
+	pipesMu sync.Mutex
+	pipes   map[Stdio]any
 	// ctx 是启动时传入的那个 —— exec.Cmd 没有公开的 ctx 访问器，
 	// 而不保存它就无法在 Wait 里区分「进程自己退了」与「ctx 被取消了」。
 	ctx context.Context
@@ -211,10 +227,15 @@ type Supervisor struct {
 // name/args 直接传给 exec.CommandContext（不经 shell）：MCP server 是
 // 一个具体的可执行文件，经过 shell 会多一层无关进程，也让参数转义成为
 // 一处注入面。需要 shell 的场景仍用 Run。
-func (m *Manager) Start(ctx context.Context, agentID, workDir, name string, args []string) (*Supervisor, error) {
+func (m *Manager) Start(ctx context.Context, agentID, workDir, name string, args []string, opts ...StartOption) (*Supervisor, error) {
 	if name == "" {
 		return nil, fmt.Errorf("sandbox: program name is required")
 	}
+	sc := startConfig{}
+	for _, o := range opts {
+		o(&sc)
+	}
+
 	lim, err := m.Prepare(ctx, agentID)
 	if err != nil {
 		return nil, err
@@ -225,6 +246,18 @@ func (m *Manager) Start(ctx context.Context, agentID, workDir, name string, args
 		cmd.Dir = workDir
 	}
 	lim.Attach(cmd)
+	if sc.env != nil {
+		cmd.Env = sc.env
+	}
+	var pipes map[Stdio]any
+	if sc.pipeStdio {
+		var perr error
+		pipes, perr = attachStdioPipes(cmd)
+		if perr != nil {
+			lim.Close()
+			return nil, perr
+		}
+	}
 
 	if err := cmd.Start(); err != nil {
 		lim.Close()
@@ -241,6 +274,7 @@ func (m *Manager) Start(ctx context.Context, agentID, workDir, name string, args
 		lim:    lim,
 		cmd:    cmd,
 		ctx:    ctx,
+		pipes:  pipes,
 		waitCh: make(chan error, 1),
 		exitCh: make(chan struct{}),
 	}
@@ -330,6 +364,109 @@ func (s *Supervisor) Stop() error {
 		return fmt.Errorf("sandbox: stop supervisor: %s", strings.Join(errs, "; "))
 	}
 	return nil
+}
+
+// StartOption 调整 Start 的行为。
+type StartOption func(*startConfig)
+
+type startConfig struct {
+	env       []string
+	pipeStdio bool
+}
+
+// WithEnv 设置子进程的环境变量**全集**（不是追加）。
+//
+// ⚠️ 这是「显式给」而不是「继承后覆盖」：子进程默认会继承 AgentBot 的
+// 全部环境变量（数据库密码、JWT 密钥）。需要什么就给什么，
+// 比「默认全给、需要时再删」安全得多 —— 后者忘删一个就是一次凭据泄漏。
+func WithEnv(env []string) StartOption {
+	return func(c *startConfig) { c.env = env }
+}
+
+// WithPipes 接管子进程的标准流，之后用 Pipe 取读写端。
+//
+// 不接管时三条流继承父进程（适合一次性脚本），接管后必须由调用方
+// **持续读走** stdout/stderr —— 管道写满会让子进程阻塞在写操作上，
+// 症状是「进程无故卡住」而真正的原因在没人读的那一端。
+func WithPipes() StartOption {
+	return func(c *startConfig) { c.pipeStdio = true }
+}
+
+// attachStdioPipes 建立三条标准流的管道。
+//
+// 返回 map 而非三个字段：调用方按 Stdio 取值，加一条流不需要改签名。
+func attachStdioPipes(cmd *exec.Cmd) (map[Stdio]any, error) {
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("sandbox: stdin pipe: %w", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		_ = stdin.Close()
+		return nil, fmt.Errorf("sandbox: stdout pipe: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		_ = stdin.Close()
+		return nil, fmt.Errorf("sandbox: stderr pipe: %w", err)
+	}
+	return map[Stdio]any{Stdin: stdin, Stdout: stdout, Stderr: stderr}, nil
+}
+
+// StdinPipe 返回子进程标准输入的写端。
+//
+// ⚠️ 不用一个 `Pipe(kind) (any, error)` 的统一入口：那会让每个调用点都写
+// 一次类型断言，而类型断言失败的返回值只有"取不到"，排查时看不出
+// 是「没接管」还是「接管了但类型不对」。两个返回值类型明确的方法更安全。
+func (s *Supervisor) StdinPipe() (io.WriteCloser, error) {
+	p, err := s.pipe(Stdin)
+	if err != nil {
+		return nil, err
+	}
+	w, ok := p.(io.WriteCloser)
+	if !ok {
+		return nil, fmt.Errorf("sandbox: stdin pipe has unexpected type %T", p)
+	}
+	return w, nil
+}
+
+// StdoutPipe 返回子进程标准输出的读端。
+func (s *Supervisor) StdoutPipe() (io.ReadCloser, error) {
+	p, err := s.pipe(Stdout)
+	if err != nil {
+		return nil, err
+	}
+	r, ok := p.(io.ReadCloser)
+	if !ok {
+		return nil, fmt.Errorf("sandbox: stdout pipe has unexpected type %T", p)
+	}
+	return r, nil
+}
+
+// StderrPipe 返回子进程标准错误的读端。
+func (s *Supervisor) StderrPipe() (io.ReadCloser, error) {
+	p, err := s.pipe(Stderr)
+	if err != nil {
+		return nil, err
+	}
+	r, ok := p.(io.ReadCloser)
+	if !ok {
+		return nil, fmt.Errorf("sandbox: stderr pipe has unexpected type %T", p)
+	}
+	return r, nil
+}
+
+func (s *Supervisor) pipe(kind Stdio) (any, error) {
+	s.pipesMu.Lock()
+	defer s.pipesMu.Unlock()
+	if s.pipes == nil {
+		return nil, fmt.Errorf("sandbox: stdin/stdout/stderr were not piped (use WithPipes)")
+	}
+	p, ok := s.pipes[kind]
+	if !ok || p == nil {
+		return nil, fmt.Errorf("sandbox: stdio kind %d was not captured", kind)
+	}
+	return p, nil
 }
 
 // CleanupAfter 轮询等待进程退出，超时则杀整个进程组。
