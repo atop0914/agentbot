@@ -5,7 +5,9 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -170,6 +172,165 @@ func (l *Limited) KillGroup() error {
 
 // Pgid 返回缓存的进程组 id（未启动时为 0）。
 func (l *Limited) Pgid() int { return l.pgid }
+
+// Supervisor 是一个**长驻进程**的监管句柄，由 Manager.Supervise 返回。
+//
+// 与 Run 的区别：Run 是「一次性执行一段脚本，等它结束」，而 MCP server 这类
+// 进程是「启动一次、长期活着、反复收发消息」。之前只有 Run 一个入口，
+// 想监管长驻进程就只能绕过沙箱自己 exec —— 那等于把「进程组回收」
+// 与「墙钟超时」这两条纪律复制出第二份，而复制出来的第二份必然漏掉某一步
+// （本仓库已在 executor/cloud 上踩过一次）。
+//
+// ⚠️ Stop 必须被调用（defer 即可）：它负责杀整个进程组并回收 cgroup。
+// 漏掉的代价是宿主上留一个吃 CPU 的孤儿 + 一个无法删除的 cgroup 目录。
+type Supervisor struct {
+	lim *Limited
+	cmd *exec.Cmd
+	// ctx 是启动时传入的那个 —— exec.Cmd 没有公开的 ctx 访问器，
+	// 而不保存它就无法在 Wait 里区分「进程自己退了」与「ctx 被取消了」。
+	ctx context.Context
+	// waitCh 只会有一次写入，由 waitLoop 消费。
+	waitCh chan error
+	// exitCh 在进程退出时被关闭，exitErr 保存退出错误。
+	//
+	// ⚠️ 为什么不是「让 Stop 去 waitCh 里探一下」：Wait() 是公开方法，
+	// 任何调用方都可能先把 waitCh 里的值取走。实测就是这么翻车的 ——
+	// 测试里先 Wait() 再 Stop()，Stop 的非阻塞探针扑空，于是仍走
+	// 杀组+drain 路径，白等 3 秒。**共享一个「已退出」的事实**才行，
+	// 不能共享一个「只能被消费一次的通道」。
+	exitOnce sync.Once
+	exitCh   chan struct{}
+	exitErr  error
+	exitMu   sync.Mutex
+	// 一旦 Stop 开始回收，Wait 的返回值不再代表「进程自己结束了」。
+	stopped atomic.Bool
+}
+
+// Start 启动一个长驻进程并把它纳入沙箱监管。
+//
+// name/args 直接传给 exec.CommandContext（不经 shell）：MCP server 是
+// 一个具体的可执行文件，经过 shell 会多一层无关进程，也让参数转义成为
+// 一处注入面。需要 shell 的场景仍用 Run。
+func (m *Manager) Start(ctx context.Context, agentID, workDir, name string, args []string) (*Supervisor, error) {
+	if name == "" {
+		return nil, fmt.Errorf("sandbox: program name is required")
+	}
+	lim, err := m.Prepare(ctx, agentID)
+	if err != nil {
+		return nil, err
+	}
+
+	cmd := exec.CommandContext(ctx, name, args...)
+	if workDir != "" {
+		cmd.Dir = workDir
+	}
+	lim.Attach(cmd)
+
+	if err := cmd.Start(); err != nil {
+		lim.Close()
+		return nil, fmt.Errorf("sandbox: start %s: %w", name, err)
+	}
+	// Track 内部会立刻缓存 pgid —— 见 KillGroup 的注释，
+	// 等到需要杀的时候再问内核可能已经问不到了。
+	if err := lim.Track(cmd.Process.Pid); err != nil {
+		// attach 失败不致命（已进 Warnings），但必须让调用方看得到。
+		_ = err
+	}
+
+	s := &Supervisor{
+		lim:    lim,
+		cmd:    cmd,
+		ctx:    ctx,
+		waitCh: make(chan error, 1),
+		exitCh: make(chan struct{}),
+	}
+	go func() { s.waitCh <- cmd.Wait() }()
+	go s.waitLoop()
+	return s, nil
+}
+
+// PID 返回被监管进程的 pid。
+func (s *Supervisor) PID() int { return s.cmd.Process.Pid }
+
+// Applied 返回实际生效的限制描述。
+func (s *Supervisor) Applied() Applied { return s.lim.Applied() }
+
+// waitLoop 把「进程是何时退出的、退出错误是什么」变成一份**可多次读取**的事实。
+func (s *Supervisor) waitLoop() {
+	err := <-s.waitCh
+	s.exitOnce.Do(func() {
+		s.exitMu.Lock()
+		s.exitErr = err
+		s.exitMu.Unlock()
+		close(s.exitCh)
+	})
+}
+
+// Wait 等待进程自行退出；Start 传入的 ctx 被取消时返回 ctx 的错误。
+func (s *Supervisor) Wait() error {
+	select {
+	case <-s.exitCh:
+		s.exitMu.Lock()
+		defer s.exitMu.Unlock()
+		return s.exitErr
+	case <-s.ctx.Done():
+		return s.ctx.Err()
+	}
+}
+
+// Exited 报告进程是否已自行退出（非阻塞）。
+//
+// 这是给「server 崩溃后我要立刻知道、而不是等下一次请求超时」用的。
+func (s *Supervisor) Exited() bool {
+	select {
+	case <-s.exitCh:
+		return true
+	default:
+		return false
+	}
+}
+
+// Stop 结束被监管进程**及整棵进程树**，并回收 cgroup。
+//
+// 顺序是刻意的：先按进程组 SIGKILL（覆盖未知孙进程），再等 Wait 收尾
+// （管道被孙进程持有，不杀干净就永远等不到），最后回收 cgroup。
+// 幂等：重复调用不会报错，方便在 defer 与显式清理里各写一次。
+func (s *Supervisor) Stop() error {
+	var errs []string
+	if !s.stopped.Swap(true) {
+		// ⚠️ 这一步不是优化，是修一个实测到的缺陷：无条件杀组 + drainWait
+		// 会在「进程早就退了」时白等满 3 秒 —— 而崩溃恰恰是长驻 server
+		// 最常见的收场，症状是每次崩溃调用方都多阻塞 3 秒。
+		//
+		// 判据用 exitCh（一份可多次读取的事实），不用 waitCh（只能被消费一次）。
+		if !s.Exited() {
+			// 进程可能已经自己退出了（崩溃场景），KillGroup 对 ESRCH 返回 nil
+			if err := s.lim.KillGroup(); err != nil {
+				errs = append(errs, err.Error())
+			}
+			// ⚠️ 等 exitCh，**不要**等 waitCh：waitCh 的唯一消费者是 waitLoop，
+			// 这里再去读它只会在 waitLoop 已取走值之后白等满 3 秒。
+			// 实测就是这么翻车的 —— 「共享一个只能被消费一次的通道」把
+			// 「等待进程退出」变成了「赌谁先读」。
+			select {
+			case <-s.exitCh:
+			case <-time.After(3 * time.Second):
+				errs = append(errs, "process did not exit within 3s of SIGKILL")
+			}
+		}
+	}
+	if s.lim.cg != nil {
+		if err := s.lim.cg.Remove(); err != nil {
+			errs = append(errs, "cgroup cleanup failed: "+err.Error())
+		}
+		s.lim.cg = nil
+		s.lim.cgPath = ""
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("sandbox: stop supervisor: %s", strings.Join(errs, "; "))
+	}
+	return nil
+}
 
 // CleanupAfter 轮询等待进程退出，超时则杀整个进程组。
 func (l *Limited) CleanupAfter(timeout time.Duration) {
