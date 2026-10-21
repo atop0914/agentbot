@@ -95,7 +95,7 @@ func (e *RPCError) Error() string {
 	if e == nil {
 		return "<nil>"
 	}
-	if e.Data != nil && len(e.Data) > 0 {
+	if len(e.Data) > 0 {
 		return fmt.Sprintf("mcp: rpc error %d: %s (data=%s)", e.Code, e.Message, string(e.Data))
 	}
 	return fmt.Sprintf("mcp: rpc error %d: %s", e.Code, e.Message)
